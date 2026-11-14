@@ -177,6 +177,14 @@ export interface FakeState {
   statuses?: { key: string; name: string; category: string }[];
   fail?: Record<string, string>;
   noWorkflowCommand?: boolean;
+  /** What `bench` reads, by issue id where it's per issue. */
+  issues?: Record<string, unknown>[];
+  runs?: Record<string, Record<string, unknown>[]>;
+  timelines?: Record<string, Record<string, unknown>[]>;
+  comments?: Record<string, Record<string, unknown>[]>;
+  attachments?: Record<string, { filename: string; text: string }>;
+  truncated?: Record<string, string>;
+  noTimeline?: boolean;
   calls: Call[];
 }
 

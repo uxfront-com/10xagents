@@ -2,6 +2,8 @@
 // a Multica workspace through the `multica` CLI.
 
 import type {
+  BenchQuery,
+  BenchResult,
   Change,
   Connector,
   ConnectorIssue,
@@ -13,6 +15,7 @@ import type {
 } from "10xagents";
 
 import { applyChanges } from "./apply.ts";
+import { bench, MULTICA_METRICS } from "./bench/index.ts";
 import type { Env } from "./multica.ts";
 import { planChanges } from "./plan.ts";
 import type { MulticaLive } from "./pull.ts";
@@ -24,6 +27,8 @@ import { checkWorkflows, columnNames, MAX_DESCRIPTION, mergeWorkflows } from "./
 export { BUILT_IN, columnNames, MAX_DESCRIPTION, MAX_STEP, mergeWorkflows } from "./workflow.ts";
 export { childEnv, DESKTOP_CLI, findMultica } from "./multica.ts";
 export { listProfiles } from "./profiles.ts";
+export { benchFrom, MULTICA_METRICS } from "./bench/index.ts";
+export type { BenchSource, CycleRow, RequestRow, RunRow, VerdictRow } from "./bench/index.ts";
 export type { MulticaLive } from "./pull.ts";
 
 /** The platform this connector syncs to. */
@@ -73,8 +78,10 @@ export const createConnector = (options: MulticaConnectorOptions = {}): Connecto
     workflowPerIssue: false,
     squads: true,
     skills: true,
-    metrics: [],
+    metrics: MULTICA_METRICS,
   },
+  // Multica's daemon runs each agent in a folder under its `multica_workspaces…` directory.
+  runFolders: /multica.workspaces/i,
   columnNames,
   validate,
   place: (live: LiveState): Place => {
@@ -98,6 +105,11 @@ export const createConnector = (options: MulticaConnectorOptions = {}): Connecto
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
   },
+  bench: (query: BenchQuery): Promise<BenchResult> =>
+    bench(query, {
+      env: options.env ?? process.env,
+      ...(options.desktop === undefined ? {} : { desktop: options.desktop }),
+    }),
   apply: (changes: Change[]) => {
     try {
       return Promise.resolve(applyChanges(changes));
