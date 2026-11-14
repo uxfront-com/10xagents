@@ -32,13 +32,18 @@
   },
   "scripts": {
     "build": "tsdown",
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "diff": "^8.0.4"
   },
   "devDependencies": {
     "10xagents": "workspace:*",
     "@types/node": "^24.0.0",
     "@uxfront/typescript-config": "^0.1.0",
-    "tsdown": "^0.23.0"
+    "tsdown": "^0.23.0",
+    "vitest": "^5.1.0"
   },
   "peerDependencies": {
     "10xagents": "workspace:^"

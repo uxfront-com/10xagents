@@ -6,7 +6,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ColumnNames } from "./contract.ts";
 import { BUILT_IN_TEMPLATES } from "./default-template.ts";
 import type { Diagnostics } from "./diagnostics.ts";
-import type { LoadedAgent, Setup, SourceText, Template, Trait } from "./loader.ts";
+import type { LoadedAgent, Setup, Skill, SourceText, Template, Trait } from "./loader.ts";
 import type { Scalar, Target, Workflow } from "./schema.ts";
 import { interpolate, joinBlocks, normalize } from "./text.ts";
 import type { Scope } from "./text.ts";
@@ -63,10 +63,21 @@ export interface RenderedSquad {
   members: Record<string, string>;
 }
 
+/** A skill the target gets: its name, and the folder that holds its files. */
+export interface RenderedSkill {
+  name: string;
+  dir: string;
+}
+
 export interface RenderedSetup {
   target: RenderedTarget;
   agents: RenderedAgent[];
   workflows: RenderedWorkflow[];
+  /**
+   * The setup's `skills/` and the target's own, sorted by name. A target's skill replaces the
+   * setup's skill with the same name.
+   */
+  skills: RenderedSkill[];
   /** The global traits, when the connector has a shared context. Empty otherwise. */
   sharedContext: string;
   squad?: RenderedSquad;
@@ -482,10 +493,16 @@ export const renderTarget = (
     };
   }
 
+  // Skills: the target's own first, so it replaces the setup's skill with its name.
+  const skills = new Map<string, Skill>([...setup.skills, ...loaded.skills]);
+
   return {
     target: { ...target, workspace: target.workspace ?? target.id },
     agents: renderedAgents,
     workflows: renderedWorkflows,
+    skills: [...skills.values()]
+      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((skill) => ({ name: skill.id, dir: skill.dir })),
     sharedContext,
     ...(squad ? { squad } : {}),
   };

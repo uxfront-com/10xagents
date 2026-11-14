@@ -361,3 +361,29 @@ describe("build files", () => {
     expect(rendered.agents).toHaveLength(302);
   });
 });
+
+/** A skill's folder, from the setup's root. */
+const where = (dir: string): string =>
+  dir.slice(dir.lastIndexOf("10xagents-")).replace(/^[^/]+\//, "");
+
+describe("skills", () => {
+  it("lists the setup's skills and the target's own, sorted, with the target's replacing the setup's", () => {
+    const rendered = renderOk({
+      ...baseSetup(),
+      "skills/writing/SKILL.md": "setup\n",
+      "skills/shared/SKILL.md": "setup\n",
+      "targets/t/skills/shared/SKILL.md": "target\n",
+      "targets/t/skills/alone/SKILL.md": "target\n",
+      "skills/not-a-folder.md": "ignored\n",
+    });
+    expect(rendered.skills.map((skill) => [skill.name, where(skill.dir)])).toEqual([
+      ["alone", "targets/t/skills/alone"],
+      ["shared", "targets/t/skills/shared"],
+      ["writing", "skills/writing"],
+    ]);
+  });
+
+  it("is empty when the setup has none", () => {
+    expect(renderOk(baseSetup()).skills).toEqual([]);
+  });
+});

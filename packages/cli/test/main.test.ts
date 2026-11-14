@@ -5,7 +5,7 @@ import { renderUsage, runCommand } from "citty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import pkg from "../package.json" with { type: "json" };
-import type { Connector } from "../src/contract.ts";
+import type { Change, Connector, PullOptions } from "../src/contract.ts";
 import { createMain, main } from "../src/main.ts";
 import { ConnectorError } from "../src/registry.ts";
 import { baseSetup, FIXTURES, tempDir, writeSetup } from "./helpers.ts";
@@ -53,9 +53,11 @@ const cli = async (
     fake: fakeConnector(),
     multica: fakeConnector({ id: "multica" }),
   },
+  ask?: (question: string) => Promise<string>,
 ): Promise<number> => {
   const command = createMain({
     cwd: () => cwd,
+    ask,
     loadConnector: (id) => {
       const connector = connectors[id];
       return connector
@@ -110,7 +112,7 @@ describe("10xagents", () => {
     }
   });
 
-  it.each(["plan", "sync", "bench"])("%s exits 1, not available yet", async (name) => {
+  it.each(["bench"])("%s exits 1, not available yet", async (name) => {
     expect(await cli(tempDir(), [name])).toBe(1);
     expect(err).toEqual([`10xagents ${name} is not available yet.`]);
   });
@@ -259,5 +261,266 @@ describe("connectors", () => {
     expect(out).toEqual([
       "No connectors installed. Install one, like @10xagents/connector-multica.\n",
     ]);
+  });
+});
+
+/** A connector whose live state is a list of changes still to make. */
+const liveConnector = (
+  initial: Change[],
+  options: {
+    failOn?: string;
+    /** The failed change no longer differs afterwards, like a write that went through anyway. */
+    failGone?: boolean;
+    stick?: string;
+    pullError?: string;
+  } = {},
+) => {
+  let pending = [...initial];
+  const pulls: PullOptions[] = [];
+  const applied: Change[][] = [];
+  const connector = fakeConnector({
+    pull: (_target, pullOptions = {}) => {
+      pulls.push(pullOptions);
+      if (options.pullError) return Promise.reject(new Error(options.pullError));
+      pullOptions.log?.("Workspace: Test");
+      return Promise.resolve({});
+    },
+    plan: () => Promise.resolve([...pending]),
+    apply: (changes) => {
+      applied.push(changes);
+      const failed = changes
+        .filter((change) => change.id === options.failOn)
+        .map((change) => ({ change, message: "refused" }));
+      pending = pending.filter(
+        (change) =>
+          change.manual ||
+          change.note ||
+          (change.id === options.failOn && !options.failGone) ||
+          change.id === options.stick,
+      );
+      return Promise.resolve({ failed });
+    },
+  });
+  return { connector, pulls, applied };
+};
+
+const agentChange: Change = {
+  kind: "agent",
+  id: "alpha",
+  summary: "~ Alpha instructions (1 line differs)",
+  diff: "-old\n+new",
+};
+const contextChange: Change = { kind: "context", id: "context", summary: "~ Agent context" };
+const manualChange: Change = {
+  kind: "agent",
+  id: "beta",
+  summary: "! Beta: no agent with this name; create it first",
+  manual: true,
+};
+const noteChange: Change = {
+  kind: "project",
+  id: "p",
+  summary: "· Side: on another workflow",
+  note: true,
+};
+
+describe("plan", () => {
+  it("lists the changes and the notes, and exits 0", async () => {
+    const { connector, pulls } = liveConnector([agentChange, noteChange, contextChange]);
+    const dir = writeSetup(baseSetup());
+    expect(
+      await cli(dir, ["plan", "--dir", ".", "--profile", "p", "--workspace", "w"], {
+        fake: connector,
+      }),
+    ).toBe(0);
+    expect(out.join("")).toBe(
+      [
+        "Workspace: Test",
+        "  · Side: on another workflow",
+        "2 changes:",
+        "  ~ Alpha instructions (1 line differs)",
+        "  ~ Agent context",
+        "",
+      ].join("\n"),
+    );
+    expect(pulls[0]).toMatchObject({ profile: "p", workspace: "w" });
+  });
+
+  it("prints each diff with --diff", async () => {
+    const { connector } = liveConnector([agentChange]);
+    expect(
+      await cli(writeSetup(baseSetup()), ["plan", "--dir", ".", "--diff"], { fake: connector }),
+    ).toBe(0);
+    expect(out.join("")).toContain(
+      "  ~ Alpha instructions (1 line differs)\n      -old\n      +new\n",
+    );
+  });
+
+  it("says when the platform is up to date", async () => {
+    const { connector } = liveConnector([]);
+    expect(await cli(writeSetup(baseSetup()), ["plan", "--dir", "."], { fake: connector })).toBe(0);
+    expect(out.join("")).toBe("Workspace: Test\nUp to date.\n");
+  });
+
+  it("exits 1 on a ! line", async () => {
+    const { connector } = liveConnector([manualChange]);
+    expect(await cli(writeSetup(baseSetup()), ["plan", "--dir", "."], { fake: connector })).toBe(1);
+    expect(out.join("")).toContain(
+      "  ! Beta: no agent with this name; create it first\n1 item needs setup first (see the ! lines above).\n",
+    );
+  });
+
+  it("exits 1 when the platform can't be read", async () => {
+    const { connector } = liveConnector([], { pullError: "several profiles: pass --profile" });
+    expect(await cli(writeSetup(baseSetup()), ["plan", "--dir", "."], { fake: connector })).toBe(1);
+    expect(err).toEqual(["Stopped: several profiles: pass --profile"]);
+  });
+
+  it("reports what the connector's platform would refuse, before reading it", async () => {
+    const { connector, pulls } = liveConnector([agentChange]);
+    const dir = writeSetup(baseSetup());
+    connector.validate = () => [
+      { field: "workflows.flow.steps.todo", message: "is too long" },
+      { file: join(dir, "skills/x/SKILL.md"), field: "name", message: "must match" },
+    ];
+    expect(await cli(dir, ["plan", "--dir", "."], { fake: connector })).toBe(1);
+    expect(err).toEqual([
+      "targets/t/target.yaml: workflows.flow.steps.todo: is too long",
+      "skills/x/SKILL.md: name: must match",
+      "2 errors.",
+    ]);
+    expect(pulls).toEqual([]);
+    expect(await cli(dir, ["build", "--dir", ".", "--out", "out"], { fake: connector })).toBe(1);
+  });
+});
+
+const yes = () => Promise.resolve("y");
+
+describe("sync", () => {
+  it("applies nothing with --dry-run", async () => {
+    const { connector, applied } = liveConnector([agentChange]);
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--dry-run"], { fake: connector }),
+    ).toBe(0);
+    expect(applied).toEqual([]);
+  });
+
+  it("applies nothing without --yes when there's no terminal to ask in", async () => {
+    const { connector, applied } = liveConnector([agentChange]);
+    expect(await cli(writeSetup(baseSetup()), ["sync", "--dir", "."], { fake: connector })).toBe(1);
+    expect(applied).toEqual([]);
+    expect(err).toEqual(["No terminal to ask in: pass --yes to apply, or --dry-run to only look."]);
+  });
+
+  it("asks first, and applies nothing unless the answer is yes", async () => {
+    const { connector, applied } = liveConnector([agentChange]);
+    const questions: string[] = [];
+    const no = (question: string) => {
+      questions.push(question);
+      return Promise.resolve("n");
+    };
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", "."], { fake: connector }, no),
+    ).toBe(0);
+    expect(questions).toEqual(["Apply 1 change to t? [y/N] "]);
+    expect(applied).toEqual([]);
+    expect(out.join("")).toContain("Skipped.");
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", "."], { fake: connector }, yes),
+    ).toBe(0);
+    expect(applied).toEqual([[agentChange]]);
+  });
+
+  it("applies only the changes with --yes, then checks again", async () => {
+    const { connector, applied, pulls } = liveConnector([agentChange, noteChange, contextChange]);
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--yes"], { fake: connector }),
+    ).toBe(0);
+    expect(applied).toEqual([[agentChange, contextChange]]);
+    expect(pulls).toHaveLength(2);
+    expect(out.join("")).toContain("Applied; t now matches the setup.\n");
+  });
+
+  it("names the workspace the connector read, and re-checks it through the same account", async () => {
+    const { connector, pulls, applied } = liveConnector([agentChange]);
+    connector.place = () => ({ name: "Team", pull: { profile: "p2", workspace: "ws-1" } });
+    const questions: string[] = [];
+    const ask = (question: string) => {
+      questions.push(question);
+      return Promise.resolve("y");
+    };
+    expect(
+      await cli(
+        writeSetup(baseSetup()),
+        ["sync", "--dir", ".", "--workspace", "team"],
+        { fake: connector },
+        ask,
+      ),
+    ).toBe(0);
+    expect(questions).toEqual(["Apply 1 change to Team? [y/N] "]);
+    expect(applied).toHaveLength(1);
+    expect(pulls).toHaveLength(2);
+    expect(pulls[0]).toMatchObject({ workspace: "team" });
+    expect(pulls[0]?.ask).toBe(ask);
+    // The re-check reads the same place, and has nothing to ask.
+    expect(pulls[1]).toEqual({ profile: "p2", workspace: "ws-1", log: expect.any(Function) });
+    expect(out.join("")).toContain("Applied; Team now matches the setup.\n");
+  });
+
+  it("names the --workspace given when the connector can't say where it read", async () => {
+    const { connector } = liveConnector([agentChange]);
+    const questions: string[] = [];
+    const no = (question: string) => {
+      questions.push(question);
+      return Promise.resolve("");
+    };
+    await cli(
+      writeSetup(baseSetup()),
+      ["sync", "--dir", ".", "--workspace", "team"],
+      { fake: connector },
+      no,
+    );
+    expect(questions).toEqual(["Apply 1 change to team? [y/N] "]);
+  });
+
+  it("exits 1 on a ! line with --dry-run", async () => {
+    const { connector } = liveConnector([manualChange, agentChange]);
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--dry-run"], { fake: connector }),
+    ).toBe(1);
+  });
+
+  it("exits 1 for a failed change, even when nothing differs afterwards", async () => {
+    const { connector } = liveConnector([agentChange], { failOn: "alpha", failGone: true });
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--yes"], { fake: connector }),
+    ).toBe(1);
+    expect(err).toEqual(["Failed: ~ Alpha instructions (1 line differs): refused"]);
+    expect(out.join("")).not.toContain("now matches");
+  });
+
+  it("exits 1 when a change is still left after the apply", async () => {
+    const { connector } = liveConnector([agentChange, contextChange], { stick: "context" });
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--yes"], { fake: connector }),
+    ).toBe(1);
+    expect(err).toEqual(["1 change still differs:", "  ~ Agent context"]);
+  });
+
+  it("reports each change that failed, and exits 1", async () => {
+    const { connector } = liveConnector([agentChange, contextChange], { failOn: "alpha" });
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--yes"], { fake: connector }),
+    ).toBe(1);
+    expect(err[0]).toBe("Failed: ~ Alpha instructions (1 line differs): refused");
+  });
+
+  it("applies what it can beside a ! line, and still exits 1", async () => {
+    const { connector, applied } = liveConnector([manualChange, agentChange]);
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--yes"], { fake: connector }),
+    ).toBe(1);
+    expect(applied).toEqual([[agentChange]]);
+    expect(out.join("")).toContain("Applied; 1 item needs setup first (see the ! lines above).");
   });
 });
