@@ -6,7 +6,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ColumnNames } from "./contract.ts";
 import { BUILT_IN_TEMPLATES } from "./default-template.ts";
 import type { Diagnostics } from "./diagnostics.ts";
-import type { LoadedAgent, Setup, SkillFolder, SourceText, Template, Trait } from "./loader.ts";
+import type { LoadedAgent, Setup, Skill, SourceText, Template, Trait } from "./loader.ts";
 import type { Scalar, Target, Workflow } from "./schema.ts";
 import { interpolate, joinBlocks, normalize } from "./text.ts";
 import type { Scope } from "./text.ts";
@@ -137,7 +137,7 @@ export const renderTarget = (
   /** A path from `target.yaml`, inside the setup. Reports it when it isn't there. */
   const targetFile = (path: string, field: string): SourceText | undefined => {
     const file = resolve(loaded.dir, path);
-    const inside = relative(setup.dir, file);
+    const inside = relative(loaded.root, file);
     if (inside.startsWith("..") || isAbsolute(inside)) {
       atTarget(field, `${path} is outside the setup`);
       return undefined;
@@ -494,15 +494,15 @@ export const renderTarget = (
   }
 
   // Skills: the target's own first, so it replaces the setup's skill with its name.
-  const skills = new Map<string, SkillFolder>([...setup.skills, ...loaded.skills]);
+  const skills = new Map<string, Skill>([...setup.skills, ...loaded.skills]);
 
   return {
     target: { ...target, workspace: target.workspace ?? target.id },
     agents: renderedAgents,
     workflows: renderedWorkflows,
     skills: [...skills.values()]
-      .toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-      .map((skill) => ({ name: skill.name, dir: skill.dir })),
+      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((skill) => ({ name: skill.id, dir: skill.dir })),
     sharedContext,
     ...(squad ? { squad } : {}),
   };

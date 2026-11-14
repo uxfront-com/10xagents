@@ -56,6 +56,14 @@ export interface PullOptions {
   log?: (line: string) => void;
 }
 
+/** Where a `pull` read from. */
+export interface Place {
+  /** Its name, like a workspace's, for the person confirming changes to it. */
+  name: string;
+  /** The options that read the same place again, through the same account, without asking. */
+  pull: PullOptions;
+}
+
 /** What `apply` couldn't do. The others went through. */
 export interface ApplyResult {
   failed: { change: Change; message: string }[];
@@ -91,6 +99,8 @@ export interface Connector {
   capabilities: Capabilities;
   /** Reads the platform's state for `target`. Throws when the platform can't be read. */
   pull(target: RenderedTarget, options?: PullOptions): Promise<LiveState>;
+  /** Where `live` was read from. Without it, the CLI names the target's workspace. */
+  place?(live: LiveState): Place;
   /** What differs, as changes to apply, `manual` changes for a person and `note`s. */
   plan(rendered: RenderedSetup, live: LiveState): Promise<Change[]>;
   /** Makes `changes`, in order. A change that fails doesn't stop the others. */

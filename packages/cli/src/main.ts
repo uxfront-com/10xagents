@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { defineCommand } from "citty";
@@ -6,9 +6,13 @@ import type { CommandDef } from "citty";
 
 import pkg from "../package.json" with { type: "json" };
 import { buildFiles, writeFiles } from "./build.ts";
-import type { Capabilities, Change, Connector, LiveState } from "./contract.ts";
+import type { Config } from "./config.ts";
+import type { Capabilities, Change, Connector, PullOptions } from "./contract.ts";
 import { Diagnostics, formatDiagnostic } from "./diagnostics.ts";
-import { loadSetup } from "./loader.ts";
+import { defaultCacheDir, githubFetcher } from "./fetch.ts";
+import { initSetup, installSetup } from "./install.ts";
+import { defaultBundledDir, openSetup } from "./layers.ts";
+import type { SourceOptions } from "./layers.ts";
 import type { LoadedTarget, Setup } from "./loader.ts";
 import { ConnectorError, findConnectors, loadConnector } from "./registry.ts";
 import { renderTarget } from "./render.ts";
@@ -20,6 +24,8 @@ export interface CliContext {
   cwd: () => string;
   loadConnector: typeof loadConnector;
   findConnectors: typeof findConnectors;
+  /** How sources are fetched and cached, and where the bundled setups are. */
+  sources: () => SourceOptions;
   /** Asks the person running the CLI, or is missing when there's no terminal to ask in. */
   ask?: ((question: string) => Promise<string>) | undefined;
 }
@@ -39,7 +45,8 @@ const terminalAsk = (): ((question: string) => Promise<string>) | undefined => {
 
 const dirArg = {
   type: "string",
-  description: "The setup's directory",
+  description:
+    "The setup: a folder, a bundled setup's name, or github:<owner>/<repo>[/<subdir>][#<ref>]",
   default: ".10xagents",
 } as const;
 const targetArg = { type: "string", description: "The target's slug" } as const;
@@ -54,17 +61,43 @@ const fail = (lines: readonly string[]): void => {
   process.exitCode = 1;
 };
 
-const printDiagnostics = (diagnostics: Diagnostics, cwd: string): void => {
+/**
+ * Prints each diagnostic, and exits 1. A file in a fetched folder shows as its source at its commit,
+ * from `labels`, rather than as a path into the cache.
+ */
+const printDiagnostics = (
+  diagnostics: Diagnostics,
+  cwd: string,
+  labels: ReadonlyMap<string, string> = new Map(),
+): void => {
   const count = diagnostics.size;
+  const label = (file: string): string => {
+    for (const [dir, source] of labels) {
+      if (file === dir) return source;
+      if (file.startsWith(`${dir}${sep}`))
+        return `${source}/${file
+          .slice(dir.length + 1)
+          .split(sep)
+          .join("/")}`;
+    }
+    return file;
+  };
   fail([
-    ...diagnostics.list.map((diagnostic) => formatDiagnostic(diagnostic, cwd)),
+    ...diagnostics.list.map((diagnostic) =>
+      formatDiagnostic({ ...diagnostic, file: label(diagnostic.file) }, cwd),
+    ),
     `${count} ${count === 1 ? "error" : "errors"}.`,
   ]);
 };
 
-/** The `--target` given, or the setup's only target. */
-const pickTarget = (setup: Setup, given: string | undefined): string | undefined => {
+/** The `--target` given, the config's `target`, or the setup's only target. */
+const pickTarget = (
+  setup: Setup,
+  config: Config,
+  given: string | undefined,
+): string | undefined => {
   if (given !== undefined) return given;
+  if (config.target !== undefined) return config.target;
   const slugs = [...setup.targets.keys()];
   if (slugs.length === 1) return slugs[0];
   fail([
@@ -86,13 +119,6 @@ const describeCapabilities = (capabilities: Capabilities): string =>
     `metrics: ${capabilities.metrics.length > 0 ? capabilities.metrics.join(", ") : "none"}`,
   ].join(", ");
 
-/** A command that a later release adds. It exits 1. */
-const notYet = (name: string, description: string): CommandDef =>
-  defineCommand({
-    meta: { name, description },
-    run: () => fail([`10xagents ${name} is not available yet.`]),
-  });
-
 const renderOptions = (connector: Connector) => ({
   sharedContext: connector.capabilities.sharedContext,
   ...(connector.columnNames ? { columnNames: connector.columnNames.bind(connector) } : {}),
@@ -110,6 +136,9 @@ const checkForConnector = (
   }
 };
 
+const plural = (size: number, one: string, many: string): string =>
+  `${size} ${size === 1 ? one : many}`;
+
 /** Prints the plan. Returns the changes to apply, and whether a person has to act. */
 const printPlan = (changes: readonly Change[], diff: boolean) => {
   const toApply = changes.filter((change) => !change.manual && !change.note);
@@ -120,11 +149,11 @@ const printPlan = (changes: readonly Change[], diff: boolean) => {
   if (toApply.length === 0) {
     say(
       manual.length > 0
-        ? `${manual.length} ${manual.length === 1 ? "item needs" : "items need"} setup first (see the ! lines above).`
+        ? `${plural(manual.length, "item needs", "items need")} setup first (see the ! lines above).`
         : "Up to date.",
     );
   } else {
-    say(`${toApply.length} ${toApply.length === 1 ? "change" : "changes"}:`);
+    say(`${plural(toApply.length, "change", "changes")}:`);
     for (const change of toApply) {
       say(`  ${change.summary}`);
       if (diff && change.diff) say(change.diff.replace(/\n+$/, "").replace(/^/gm, "      "));
@@ -133,14 +162,61 @@ const printPlan = (changes: readonly Change[], diff: boolean) => {
   return { toApply, manual: manual.length > 0 };
 };
 
+interface Planned {
+  changes: Change[];
+  /** Where the changes go, named for the person confirming them. */
+  name: string;
+  /** The options that read the same place again, with nothing left to ask. */
+  again: PullOptions;
+}
+
+/** Reads the live state and plans. `undefined` after an error. */
+const planLive = async (
+  connector: Connector,
+  rendered: RenderedSetup,
+  options: PullOptions,
+): Promise<Planned | undefined> => {
+  try {
+    const live = await connector.pull(rendered.target, { ...options, log: say });
+    const place = connector.place?.(live);
+    return {
+      changes: await connector.plan(rendered, live),
+      name: place?.name ?? options.workspace ?? rendered.target.workspace,
+      again: place?.pull ?? options,
+    };
+  } catch (error) {
+    fail([`Stopped: ${error instanceof Error ? error.message : String(error)}`]);
+    return undefined;
+  }
+};
+
+/** A command that a later release adds. It exits 1. */
+const notYet = (name: string, description: string): CommandDef =>
+  defineCommand({
+    meta: { name, description },
+    run: () => fail([`10xagents ${name} is not available yet.`]),
+  });
+
 export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
   const ctx: CliContext = {
     cwd: () => process.cwd(),
     loadConnector,
     findConnectors,
+    sources: () => ({
+      fetcher: githubFetcher(),
+      cacheDir: defaultCacheDir(),
+      bundledDir: defaultBundledDir(),
+    }),
     ask: terminalAsk(),
     ...context,
   };
+
+  /** Source options that print each source resolved now, and label fetched files in messages. */
+  const sourceOptions = (labels: Map<string, string>): SourceOptions => ({
+    ...ctx.sources(),
+    onResolve: (source, sha) => console.error(`Resolved ${source} to ${sha}.`),
+    labels,
+  });
 
   const validate = defineCommand({
     meta: {
@@ -149,12 +225,15 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
         "Check the schemas, every reference (traits, params, vars, workflows, slots, templates) and the workflow graph",
     },
     args: { dir: dirArg, target: { ...targetArg, description: "Check only this target" } },
-    run: ({ args }) => {
+    run: async ({ args }) => {
       const cwd = ctx.cwd();
       const diagnostics = new Diagnostics();
-      const setup = loadSetup(resolve(cwd, args.dir), diagnostics);
+      const labels = new Map<string, string>();
+      const opened = await openSetup(args.dir, cwd, sourceOptions(labels), diagnostics);
+      if (!opened) return printDiagnostics(diagnostics, cwd, labels);
+      const { setup } = opened;
       validateSetup(setup, diagnostics, args.target === undefined ? {} : { target: args.target });
-      if (diagnostics.size > 0) return printDiagnostics(diagnostics, cwd);
+      if (diagnostics.size > 0) return printDiagnostics(diagnostics, cwd, labels);
       const targets = args.target === undefined ? setup.targets.size : 1;
       say(
         `Valid: ${setup.agents.size} agents, ${setup.workflows.size} workflows, ${targets} ${targets === 1 ? "target" : "targets"}.`,
@@ -175,11 +254,14 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
     run: async ({ args }) => {
       const cwd = ctx.cwd();
       const diagnostics = new Diagnostics();
-      const setup = loadSetup(resolve(cwd, args.dir), diagnostics);
-      const slug = pickTarget(setup, args.target);
+      const labels = new Map<string, string>();
+      const opened = await openSetup(args.dir, cwd, sourceOptions(labels), diagnostics);
+      if (!opened) return printDiagnostics(diagnostics, cwd, labels);
+      const { setup } = opened;
+      const slug = pickTarget(setup, opened.config, args.target);
       if (slug === undefined) return;
       validateSetup(setup, diagnostics, { target: slug });
-      if (diagnostics.size > 0) return printDiagnostics(diagnostics, cwd);
+      if (diagnostics.size > 0) return printDiagnostics(diagnostics, cwd, labels);
       const target = setup.targets.get(slug);
       if (!target) return;
       let connector;
@@ -190,9 +272,10 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
         throw error;
       }
       const rendered = renderTarget(setup, slug, diagnostics, renderOptions(connector));
-      if (!rendered || diagnostics.size > 0) return printDiagnostics(diagnostics, cwd);
-      checkForConnector(connector, rendered, target, diagnostics);
-      if (diagnostics.size > 0) return printDiagnostics(diagnostics, cwd);
+      if (rendered && diagnostics.size === 0) {
+        checkForConnector(connector, rendered, target, diagnostics);
+      }
+      if (!rendered || diagnostics.size > 0) return printDiagnostics(diagnostics, cwd, labels);
       const out = resolve(cwd, args.out);
       if (out === setup.dir) {
         return fail(["--out must not be the setup's own directory: its files would mix."]);
@@ -204,20 +287,94 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
     },
   });
 
-  /** Loads, validates and renders a target for its connector. `undefined` after an error. */
+  const install = defineCommand({
+    meta: {
+      name: "install",
+      description:
+        "Pin every remote source to a commit in 10xagents.lock. --update moves each to its latest ref",
+    },
+    args: {
+      dir: { ...dirArg, description: "The setup's folder" },
+      update: { type: "boolean", description: "Move every source to its ref's latest commit" },
+    },
+    run: async ({ args }) => {
+      const cwd = ctx.cwd();
+      const diagnostics = new Diagnostics();
+      const labels = new Map<string, string>();
+      const installed = await installSetup(
+        args.dir,
+        cwd,
+        args.update === true,
+        { ...ctx.sources(), labels },
+        diagnostics,
+      );
+      if (!installed) return printDiagnostics(diagnostics, cwd, labels);
+      for (const [source, { sha }] of installed.lock) say(`${source} → ${sha}`);
+      const count = installed.lock.size;
+      say(
+        `${installed.changed ? "Wrote" : "Kept"} 10xagents.lock: ${count} remote ${count === 1 ? "source" : "sources"}.`,
+      );
+    },
+  });
+
+  const init = defineCommand({
+    meta: {
+      name: "init",
+      description:
+        "Write .10xagents/10xagents.config.ts extending a source, plus a starter target, then install",
+    },
+    args: {
+      dir: { ...dirArg, description: "The new setup's folder" },
+      from: {
+        type: "string",
+        description: "The setup to extend: a folder, a bundled setup's name, or github:…",
+        default: "ultracode",
+      },
+      target: {
+        type: "string",
+        description: "The starter target's slug. The default is the current folder's name",
+      },
+    },
+    run: async ({ args }) => {
+      const cwd = ctx.cwd();
+      const diagnostics = new Diagnostics();
+      const labels = new Map<string, string>();
+      const initialized = await initSetup(
+        args.dir,
+        args.from,
+        args.target,
+        cwd,
+        sourceOptions(labels),
+        diagnostics,
+      );
+      if (!initialized) return printDiagnostics(diagnostics, cwd, labels);
+      for (const file of initialized.files) say(`Wrote ${relative(cwd, file) || file}.`);
+      say(
+        `The setup extends ${initialized.from}, with the starter target ${initialized.target}. Run 10xagents validate next.`,
+      );
+    },
+  });
+
+  /** Opens, validates and renders a target for its connector. `undefined` after an error. */
   const prepare = async (
     dir: string,
     given: string | undefined,
   ): Promise<{ connector: Connector; rendered: RenderedSetup } | undefined> => {
     const cwd = ctx.cwd();
     const diagnostics = new Diagnostics();
-    const setup = loadSetup(resolve(cwd, dir), diagnostics);
-    const slug = pickTarget(setup, given);
+    const labels = new Map<string, string>();
+    const opened = await openSetup(dir, cwd, sourceOptions(labels), diagnostics);
+    if (!opened) {
+      printDiagnostics(diagnostics, cwd, labels);
+      return undefined;
+    }
+    const { setup } = opened;
+    const slug = pickTarget(setup, opened.config, given);
     if (slug === undefined) return undefined;
     validateSetup(setup, diagnostics, { target: slug });
     const target = diagnostics.size > 0 ? undefined : setup.targets.get(slug);
     if (!target) {
-      printDiagnostics(diagnostics, cwd);
+      printDiagnostics(diagnostics, cwd, labels);
       return undefined;
     }
     let connector: Connector;
@@ -233,7 +390,7 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       checkForConnector(connector, rendered, target, diagnostics);
     }
     if (!rendered || diagnostics.size > 0) {
-      printDiagnostics(diagnostics, cwd);
+      printDiagnostics(diagnostics, cwd, labels);
       return undefined;
     }
     return { connector, rendered };
@@ -247,25 +404,12 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
     diff: { type: "boolean", description: "Print each text diff", default: false },
   } as const;
 
-  /** Reads the live state and plans. `undefined` after an error. */
-  const planLive = async (
-    connector: Connector,
-    rendered: RenderedSetup,
-    args: { profile?: string | undefined; workspace?: string | undefined },
-  ): Promise<Change[] | undefined> => {
-    try {
-      const live: LiveState = await connector.pull(rendered.target, {
-        ...(args.profile === undefined ? {} : { profile: args.profile }),
-        ...(args.workspace === undefined ? {} : { workspace: args.workspace }),
-        ...(ctx.ask ? { ask: ctx.ask } : {}),
-        log: say,
-      });
-      return await connector.plan(rendered, live);
-    } catch (error) {
-      fail([`Stopped: ${error instanceof Error ? error.message : String(error)}`]);
-      return undefined;
-    }
-  };
+  /** `--profile` and `--workspace` as pull options, with the terminal to ask in. */
+  const pullOptions = (args: { profile?: string | undefined; workspace?: string | undefined }) => ({
+    ...(args.profile === undefined ? {} : { profile: args.profile }),
+    ...(args.workspace === undefined ? {} : { workspace: args.workspace }),
+    ...(ctx.ask ? { ask: ctx.ask } : {}),
+  });
 
   const plan = defineCommand({
     meta: {
@@ -276,10 +420,9 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
     run: async ({ args }) => {
       const prepared = await prepare(args.dir, args.target);
       if (!prepared) return;
-      const changes = await planLive(prepared.connector, prepared.rendered, args);
-      if (!changes) return;
-      const { manual } = printPlan(changes, args.diff);
-      if (manual) process.exitCode = 1;
+      const planned = await planLive(prepared.connector, prepared.rendered, pullOptions(args));
+      if (!planned) return;
+      if (printPlan(planned.changes, args.diff).manual) process.exitCode = 1;
     },
   });
 
@@ -298,17 +441,18 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       const prepared = await prepare(args.dir, args.target);
       if (!prepared) return;
       const { connector, rendered } = prepared;
-      const changes = await planLive(connector, rendered, args);
-      if (!changes) return;
-      const { toApply, manual } = printPlan(changes, args.diff);
+      const planned = await planLive(connector, rendered, pullOptions(args));
+      if (!planned) return;
+      const { toApply, manual } = printPlan(planned.changes, args.diff);
       if (manual) process.exitCode = 1;
       if (toApply.length === 0 || args["dry-run"]) return;
       if (!args.yes) {
         if (!ctx.ask) {
           return fail(["No terminal to ask in: pass --yes to apply, or --dry-run to only look."]);
         }
-        const count = `${toApply.length} ${toApply.length === 1 ? "change" : "changes"}`;
-        const answer = await ctx.ask(`Apply ${count} to ${rendered.target.workspace}? [y/N] `);
+        const answer = await ctx.ask(
+          `Apply ${plural(toApply.length, "change", "changes")} to ${planned.name}? [y/N] `,
+        );
         if (!/^y(es)?$/i.test(answer.trim())) {
           say("Skipped.");
           return;
@@ -324,22 +468,22 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       if (failed.length > 0) {
         fail(failed.map(({ change, message }) => `Failed: ${change.summary}: ${message}`));
       }
-      // A re-check: what still differs after the apply is a failure.
-      const left = await planLive(connector, rendered, args);
+      // A re-check of the same place, through the same account, with nothing to ask.
+      const left = await planLive(connector, rendered, planned.again);
       if (!left) return;
-      const leftToApply = left.filter((change) => !change.manual && !change.note);
-      const leftManual = left.filter((change) => change.manual);
+      const leftToApply = left.changes.filter((change) => !change.manual && !change.note);
+      const leftManual = left.changes.filter((change) => change.manual);
       if (leftToApply.length > 0) {
         fail([
-          `${leftToApply.length} ${leftToApply.length === 1 ? "change still differs" : "changes still differ"}:`,
+          `${plural(leftToApply.length, "change still differs", "changes still differ")}:`,
           ...leftToApply.map((change) => `  ${change.summary}`),
         ]);
       } else if (leftManual.length > 0) {
         say(
-          `Applied; ${leftManual.length} ${leftManual.length === 1 ? "item needs" : "items need"} setup first (see the ! lines above).`,
+          `Applied; ${plural(leftManual.length, "item needs", "items need")} setup first (see the ! lines above).`,
         );
         process.exitCode = 1;
-      } else say("Applied; the workspace now matches the setup.");
+      } else if (failed.length === 0) say(`Applied; ${planned.name} now matches the setup.`);
     },
   });
 
@@ -371,11 +515,8 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       description: pkg.description,
     },
     subCommands: {
-      init: notYet(
-        "init",
-        "Write .10xagents/10xagents.config.ts extending a source, plus a starter target",
-      ),
-      install: notYet("install", "Fetch the remote sources and write 10xagents.lock"),
+      init,
+      install,
       validate,
       build,
       plan,

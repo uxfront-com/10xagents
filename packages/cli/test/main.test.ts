@@ -67,6 +67,14 @@ const cli = async (
           );
     },
     findConnectors: () => Object.keys(connectors).toSorted(),
+    sources: () => ({
+      fetcher: {
+        resolveRef: () => Promise.reject(new Error("no network in tests")),
+        download: () => Promise.reject(new Error("no network in tests")),
+      },
+      cacheDir: join(cwd, ".cache"),
+      bundledDir: join(cwd, ".bundled"),
+    }),
   });
   await runCommand(command, { rawArgs });
   const code = process.exitCode ?? 0;
@@ -104,7 +112,7 @@ describe("10xagents", () => {
     }
   });
 
-  it.each(["init", "install", "bench"])("%s exits 1, not available yet", async (name) => {
+  it.each(["bench"])("%s exits 1, not available yet", async (name) => {
     expect(await cli(tempDir(), [name])).toBe(1);
     expect(err).toEqual([`10xagents ${name} is not available yet.`]);
   });
@@ -259,7 +267,13 @@ describe("connectors", () => {
 /** A connector whose live state is a list of changes still to make. */
 const liveConnector = (
   initial: Change[],
-  options: { failOn?: string; stick?: string; pullError?: string } = {},
+  options: {
+    failOn?: string;
+    /** The failed change no longer differs afterwards, like a write that went through anyway. */
+    failGone?: boolean;
+    stick?: string;
+    pullError?: string;
+  } = {},
 ) => {
   let pending = [...initial];
   const pulls: PullOptions[] = [];
@@ -281,7 +295,7 @@ const liveConnector = (
         (change) =>
           change.manual ||
           change.note ||
-          change.id === options.failOn ||
+          (change.id === options.failOn && !options.failGone) ||
           change.id === options.stick,
       );
       return Promise.resolve({ failed });
@@ -424,7 +438,65 @@ describe("sync", () => {
     ).toBe(0);
     expect(applied).toEqual([[agentChange, contextChange]]);
     expect(pulls).toHaveLength(2);
-    expect(out.join("")).toContain("Applied; the workspace now matches the setup.\n");
+    expect(out.join("")).toContain("Applied; t now matches the setup.\n");
+  });
+
+  it("names the workspace the connector read, and re-checks it through the same account", async () => {
+    const { connector, pulls, applied } = liveConnector([agentChange]);
+    connector.place = () => ({ name: "Team", pull: { profile: "p2", workspace: "ws-1" } });
+    const questions: string[] = [];
+    const ask = (question: string) => {
+      questions.push(question);
+      return Promise.resolve("y");
+    };
+    expect(
+      await cli(
+        writeSetup(baseSetup()),
+        ["sync", "--dir", ".", "--workspace", "team"],
+        { fake: connector },
+        ask,
+      ),
+    ).toBe(0);
+    expect(questions).toEqual(["Apply 1 change to Team? [y/N] "]);
+    expect(applied).toHaveLength(1);
+    expect(pulls).toHaveLength(2);
+    expect(pulls[0]).toMatchObject({ workspace: "team" });
+    expect(pulls[0]?.ask).toBe(ask);
+    // The re-check reads the same place, and has nothing to ask.
+    expect(pulls[1]).toEqual({ profile: "p2", workspace: "ws-1", log: expect.any(Function) });
+    expect(out.join("")).toContain("Applied; Team now matches the setup.\n");
+  });
+
+  it("names the --workspace given when the connector can't say where it read", async () => {
+    const { connector } = liveConnector([agentChange]);
+    const questions: string[] = [];
+    const no = (question: string) => {
+      questions.push(question);
+      return Promise.resolve("");
+    };
+    await cli(
+      writeSetup(baseSetup()),
+      ["sync", "--dir", ".", "--workspace", "team"],
+      { fake: connector },
+      no,
+    );
+    expect(questions).toEqual(["Apply 1 change to team? [y/N] "]);
+  });
+
+  it("exits 1 on a ! line with --dry-run", async () => {
+    const { connector } = liveConnector([manualChange, agentChange]);
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--dry-run"], { fake: connector }),
+    ).toBe(1);
+  });
+
+  it("exits 1 for a failed change, even when nothing differs afterwards", async () => {
+    const { connector } = liveConnector([agentChange], { failOn: "alpha", failGone: true });
+    expect(
+      await cli(writeSetup(baseSetup()), ["sync", "--dir", ".", "--yes"], { fake: connector }),
+    ).toBe(1);
+    expect(err).toEqual(["Failed: ~ Alpha instructions (1 line differs): refused"]);
+    expect(out.join("")).not.toContain("now matches");
   });
 
   it("exits 1 when a change is still left after the apply", async () => {
