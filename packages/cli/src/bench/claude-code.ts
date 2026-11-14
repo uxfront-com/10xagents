@@ -307,6 +307,9 @@ const contextOf = (usage: Usage): number =>
 const isEntry = (input: unknown): input is Entry =>
   !!input && typeof input === "object" && !Array.isArray(input);
 
+/** The start of a text, which is all that tells a run's first line from the others. */
+const head = (text: string): string => text.trimStart().slice(0, 64);
+
 /**
  * The parts of a line the measures read, and nothing else: no tool output, prompt, reply or file
  * text. A tool call keeps its label, a tool result its size and images, and a text block the start
@@ -315,7 +318,6 @@ const isEntry = (input: unknown): input is Entry =>
  */
 const slim = (entry: Entry): Entry => {
   const { message } = entry;
-  const head = (text: string) => text.trimStart().slice(0, 64);
   let content: unknown;
   if (typeof message?.content === "string") content = head(message.content);
   else if (message) {
