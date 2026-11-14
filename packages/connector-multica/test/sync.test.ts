@@ -2,7 +2,7 @@ import { chmodSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { childEnv, findMultica, validate } from "../src/index.ts";
+import { childEnv, createConnector, findMultica, validate } from "../src/index.ts";
 import {
   baseFiles,
   fake,
@@ -168,6 +168,23 @@ describe("profiles", () => {
     expect(new Set(multica.calls().map((call) => call.profile))).toEqual(new Set(["p2"]));
   });
 
+  it("asks for the profile once, and its place reads the same profile and workspace again", async () => {
+    const multica = fake({ ...freshState(), profile: "p2" }, ["p1", "p2"]);
+    const connector = createConnector({ env: multica.env, desktop: "/nowhere/multica" });
+    const questions: string[] = [];
+    const ask = (question: string) => {
+      questions.push(question);
+      return Promise.resolve("2");
+    };
+    const rendered = render();
+    const live = await connector.pull(rendered.target, { ask });
+    const place = connector.place?.(live);
+    expect(place).toEqual({ name: "Team", pull: { profile: "p2", workspace: "ws-1" } });
+    await connector.pull(rendered.target, { ...place?.pull, ask });
+    expect(questions).toEqual(["Profile (number): "]);
+    expect(new Set(multica.calls().map((call) => call.profile))).toEqual(new Set(["p2"]));
+  });
+
   it("uses the only profile there is", async () => {
     const multica = fake();
     const { live } = await planWith(render(), multica.env, null);
@@ -218,6 +235,25 @@ describe("skills", () => {
     ).toEqual(["extra", "mine", "workspace"]);
     expect(multica.writes().filter((line) => line.startsWith("agent skills"))).toHaveLength(2);
     expect(multica.writes().some((line) => /remove|delete/.test(line))).toBe(false);
+  });
+
+  it("attaches the skills that are there when another fails to import", async () => {
+    const multica = fake();
+    multica.set((state) => {
+      state.skills.push({
+        id: "sk-ws",
+        name: "workspace",
+        content: "---\nname: workspace\n---\n\nThe workspace.\n",
+        files: [{ path: "repos/rules.md", content: "Rules.\n" }],
+      });
+      state.fail = { "skill import": "owned by another account" };
+    });
+    const { failed } = await syncWith(render(), multica.env);
+    expect(failed.map(({ change, message }) => `${change.summary}: ${message}`)).toEqual([
+      "+ extra (new): multica skill import --file: owned by another account",
+      "+ Alpha skills: workspace, extra: not in the workspace, so not attached: extra",
+    ]);
+    expect(multica.state().agents[0]?.skills.map((skill) => skill.name)).toEqual(["workspace"]);
   });
 
   it("prints ! for a skill that's attached but disabled", async () => {

@@ -94,7 +94,8 @@ describe("two workflows", () => {
   it.each([
     ["handoff", "{ key: blocked, handoff: none }", undefined, "handoff"],
     ["step text", "{ key: blocked, handoff: owner }", "Wait for the owner.\n", "step text"],
-    ["move", "{ key: blocked, handoff: owner, back: planning }", undefined, "back"],
+    ["back move", "{ key: blocked, handoff: owner, back: planning }", undefined, "back"],
+    ["next move", "{ key: blocked, handoff: owner, next: done }", undefined, "next"],
   ])("fail validate when they give a shared column another %s", (_, blocked, step, what) => {
     const issues = issuesOf(render(twoWorkflows(blocked, step)));
     expect(issues).toEqual([
@@ -111,11 +112,11 @@ const changed = (change: (rendered: RenderedSetup) => void): RenderedSetup => {
 };
 
 /** The issues for an agent description of `size` characters. */
-const withDescription = (size: number): string[] =>
+const withDescription = (size: number, character = "é"): string[] =>
   issuesOf(
     changed((rendered) => {
       const agent = rendered.agents[0];
-      if (agent) agent.description = "é".repeat(size);
+      if (agent) agent.description = character.repeat(size);
     }),
   );
 
@@ -137,6 +138,19 @@ describe("validate", () => {
     expect(withDescription(255)).toEqual([]);
     expect(withDescription(256)).toEqual([
       "agents.alpha.description: is 256 characters, over Multica's 255",
+    ]);
+  });
+
+  it("counts code points, not UTF-16 units", () => {
+    expect(withDescription(255, "😀")).toEqual([]);
+    expect(withDescription(256, "😀")).toEqual([
+      "agents.alpha.description: is 256 characters, over Multica's 255",
+    ]);
+  });
+
+  it("refuses a squad whose instructions render empty", () => {
+    expect(issuesOf(render({ ...baseFiles(), "squad.md": null }))).toEqual([
+      "squad.instructions: renders empty: add squad.md to the setup or the target, or point squad.instructions at a file",
     ]);
   });
 

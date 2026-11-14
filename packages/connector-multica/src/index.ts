@@ -6,6 +6,7 @@ import type {
   Connector,
   ConnectorIssue,
   LiveState,
+  Place,
   PullOptions,
   RenderedSetup,
   RenderedTarget,
@@ -50,6 +51,14 @@ export const validate = (rendered: RenderedSetup): ConnectorIssue[] => {
     }
   }
   for (const skill of rendered.skills) issues.push(...checkSkill(skill));
+  // Multica would keep the squad's instructions only if they're there to write.
+  if (rendered.squad && !rendered.squad.instructions.trim()) {
+    issues.push({
+      field: "squad.instructions",
+      message:
+        "renders empty: add squad.md to the setup or the target, or point squad.instructions at a file",
+    });
+  }
   issues.push(...checkWorkflows(rendered, mergeWorkflows(rendered)));
   return issues;
 };
@@ -68,6 +77,14 @@ export const createConnector = (options: MulticaConnectorOptions = {}): Connecto
   },
   columnNames,
   validate,
+  place: (live: LiveState): Place => {
+    if (!isLive(live)) throw new Error("not a Multica connector's live state");
+    return {
+      name: live.workspace.name,
+      // The profile and workspace this pull resolved, so a re-check reads the same place.
+      pull: { profile: live.profile, workspace: live.workspace.id },
+    };
+  },
   pull: (target: RenderedTarget, pullOptions: PullOptions = {}): Promise<LiveState> =>
     pull(target, pullOptions, {
       env: options.env ?? process.env,

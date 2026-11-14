@@ -98,17 +98,22 @@ const applyOne = (data: ChangeData, file: (name: string, content: string | Buffe
     case "agent-skills-add": {
       // A skill this sync just imported has an id only now.
       const listed = runJson(cli, ["skill", "list"], workspace);
-      const ids = (Array.isArray(listed) ? listed : [])
+      const matched = (Array.isArray(listed) ? listed : [])
         .filter(
           (skill): skill is { id: unknown; name: unknown } =>
             !!skill && typeof skill === "object" && "name" in skill && "id" in skill,
         )
-        .filter((skill) => data.skills.includes(String(skill.name)))
-        .map((skill) => String(skill.id));
-      if (ids.length !== data.skills.length) {
-        throw new Error(`skills not in the workspace: ${data.skills.join(", ")}`);
+        .filter((skill) => data.skills.includes(String(skill.name)));
+      // Attach what's there, as sync.mjs did, and report the rest.
+      if (matched.length > 0) {
+        const ids = matched.map((skill) => String(skill.id));
+        call(["agent", "skills", "add", data.agent, "--skill-ids", ids.join(",")]);
       }
-      call(["agent", "skills", "add", data.agent, "--skill-ids", ids.join(",")]);
+      const found = new Set(matched.map((skill) => String(skill.name)));
+      const missing = data.skills.filter((name) => !found.has(name));
+      if (missing.length > 0) {
+        throw new Error(`not in the workspace, so not attached: ${missing.join(", ")}`);
+      }
       return;
     }
     case "squad-instructions":
