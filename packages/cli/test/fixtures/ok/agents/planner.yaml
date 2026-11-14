@@ -1,0 +1,16 @@
+id: planner
+name: Planner
+description: Turns chosen work into a plan.
+model: { id: test-model, thinking: high }
+concurrency: 2
+skills: [workspace, planning]
+squad: { role: Plans the work. }
+sections:
+  role: |
+    You're the {{agent.name}}. You plan work for {{vars.owner}}.
+  handback: |
+    A plan. Move the issue to {{workflows.request.columns.plan_review}}.
+traits:
+  - plan-from-code
+  - id: tone
+    params: { voice: plain }

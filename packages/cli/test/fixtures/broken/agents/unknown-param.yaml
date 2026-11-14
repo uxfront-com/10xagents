@@ -1,0 +1,11 @@
+id: unknown-param
+name: Unknown-Param
+description: A broken fixture.
+model: { id: test-model, thinking: low }
+concurrency: 1
+traits:
+  - id: tone
+    params: { loudness: 3 }
+sections:
+  role: You do one thing.
+  handback: The result.

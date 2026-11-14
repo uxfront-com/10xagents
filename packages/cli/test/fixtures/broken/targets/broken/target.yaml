@@ -1,0 +1,15 @@
+id: broken
+connector: multica
+workflows: [flow]
+agents:
+  - lead
+  - missing-trait
+  - unknown-param
+  - undefined-var
+  - unknown-workflow
+  - unknown-column
+  - slot-missing
+  - empty-required
+  - missing-template
+  - long-description
+squad: { name: Broken, leader: ghost }

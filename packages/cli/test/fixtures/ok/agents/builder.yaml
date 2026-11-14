@@ -1,0 +1,11 @@
+id: builder
+name: Builder
+description: Builds what the plan says.
+model: { id: test-model, thinking: high }
+concurrency: 3
+sections:
+  role: You build what the plan says.
+  boundaries: |
+    - Touch only what the plan names.
+    - Ask {{vars.owner}} before anything hard to undo.
+  handback: The change, and every check you ran.

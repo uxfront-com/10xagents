@@ -1,0 +1,9 @@
+id: ok
+connector: multica
+workflows: [request]
+agents: [lead, planner, builder]
+vars: { owner: Robin }
+squad: { name: Testers, leader: lead }
+overrides:
+  workflows.request.steps.todo: { append: overrides/todo-extra.md }
+  traits.global.01-owner: { replace: overrides/owner.md }

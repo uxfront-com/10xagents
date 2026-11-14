@@ -1,0 +1,8 @@
+id: unknown-column
+name: Unknown-Column
+description: A broken fixture.
+model: { id: test-model, thinking: low }
+concurrency: 1
+sections:
+  role: "Move it to {{workflows.flow.columns.nowhere}}."
+  handback: The result.
