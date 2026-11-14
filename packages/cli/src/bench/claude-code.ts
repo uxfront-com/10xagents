@@ -3,9 +3,18 @@
 // the subagents with the main loop. It reports counts and sizes only: no prompts, replies, file
 // contents, paths or command text.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import type { BenchQuery, BenchResult, Collector, MetricResult } from "../contract.ts";
 import { pct, sorted, sum, value } from "./stats.ts";
@@ -80,6 +89,11 @@ interface Block {
   text?: string;
   input?: Record<string, unknown>;
   content?: unknown;
+  /** A tool call's label, worked out as the line is read. */
+  label?: string;
+  /** A tool result's size in characters and its images, worked out as the line is read. */
+  size?: number;
+  images?: number;
 }
 
 export interface UsageSum {
@@ -131,20 +145,6 @@ const blank = (): UsageSum => ({
   cost: 0,
 });
 
-const isEntry = (input: unknown): input is Entry =>
-  !!input && typeof input === "object" && !Array.isArray(input);
-const readLines = (path: string): Entry[] =>
-  readFileSync(path, "utf8")
-    .split("\n")
-    .flatMap((line) => {
-      try {
-        const parsed: unknown = line ? JSON.parse(line) : undefined;
-        return isEntry(parsed) ? [parsed] : [];
-      } catch {
-        return [];
-      }
-    });
-
 const ms = (entry: Entry): number => Date.parse(entry.timestamp ?? "") || 0;
 const blocks = (entry: Entry): Block[] =>
   Array.isArray(entry.message?.content)
@@ -156,11 +156,16 @@ const contentParts = (block: Block): Block[] =>
     ? (block.content as unknown[]).filter((c): c is Block => !!c && typeof c === "object")
     : [];
 const resultSize = (block: Block): number =>
-  typeof block.content === "string"
-    ? block.content.length
-    : contentParts(block).reduce((n, c) => n + (c.type === "text" ? (c.text ?? "").length : 0), 0);
+  block.size !== undefined
+    ? block.size
+    : typeof block.content === "string"
+      ? block.content.length
+      : contentParts(block).reduce(
+          (n, c) => n + (c.type === "text" ? (c.text ?? "").length : 0),
+          0,
+        );
 const resultImages = (block: Block): number =>
-  contentParts(block).filter((c) => c.type === "image").length;
+  block.images ?? contentParts(block).filter((c) => c.type === "image").length;
 const str = (x: unknown): string | undefined => (typeof x === "string" ? x : undefined);
 
 // A tool call's label: its name, and for a few tools a short class of what it touched, never the
@@ -221,6 +226,7 @@ const commandHead = (command: string | undefined): string => {
   return head;
 };
 const labelOf = (block: Block): string => {
+  if (block.label !== undefined) return block.label;
   const input = block.input ?? {};
   if (block.name === "Read") return `Read ${fileClass(str(input.file_path))}`;
   if (block.name === "Bash") return `Bash ${commandHead(str(input.command))}`;
@@ -297,6 +303,115 @@ const contextOf = (usage: Usage): number =>
   (usage.input_tokens ?? 0) +
   (usage.cache_read_input_tokens ?? 0) +
   (usage.cache_creation_input_tokens ?? 0);
+
+const isEntry = (input: unknown): input is Entry =>
+  !!input && typeof input === "object" && !Array.isArray(input);
+
+/**
+ * The parts of a line the measures read, and nothing else: no tool output, prompt, reply or file
+ * text. A tool call keeps its label, a tool result its size and images, and a text block the start
+ * a run's first line is told by. Sessions hold gigabytes of tool output, so this is what keeps
+ * memory flat.
+ */
+const slim = (entry: Entry): Entry => {
+  const { message } = entry;
+  const head = (text: string) => text.trimStart().slice(0, 64);
+  let content: unknown;
+  if (typeof message?.content === "string") content = head(message.content);
+  else if (message) {
+    content = blocks(entry).flatMap((b): Block[] => {
+      if (b.type === "text") return [{ type: "text", text: head(b.text ?? "") }];
+      if (b.type === "tool_use") {
+        const path = str(b.input?.file_path);
+        const type = str(b.input?.subagent_type);
+        return [
+          {
+            type: "tool_use",
+            ...(b.id === undefined ? {} : { id: b.id }),
+            ...(b.name === undefined ? {} : { name: b.name }),
+            label: labelOf(b),
+            input: {
+              ...(path === undefined ? {} : { file_path: path }),
+              ...(type === undefined ? {} : { subagent_type: type }),
+            },
+          },
+        ];
+      }
+      if (b.type === "tool_result") {
+        return [
+          {
+            type: "tool_result",
+            ...(b.tool_use_id === undefined ? {} : { tool_use_id: b.tool_use_id }),
+            size: resultSize(b),
+            images: resultImages(b),
+          },
+        ];
+      }
+      return [];
+    });
+  }
+  return {
+    ...(entry.type === undefined ? {} : { type: entry.type }),
+    ...(entry.subtype === undefined ? {} : { subtype: entry.subtype }),
+    ...(entry.timestamp === undefined ? {} : { timestamp: entry.timestamp }),
+    ...(entry.cwd === undefined ? {} : { cwd: entry.cwd }),
+    ...(entry.uuid === undefined ? {} : { uuid: entry.uuid }),
+    ...(entry.requestId === undefined ? {} : { requestId: entry.requestId }),
+    ...(entry.isSidechain ? { isSidechain: true } : {}),
+    ...(entry.isMeta ? { isMeta: true } : {}),
+    ...(entry.isCompactSummary ? { isCompactSummary: true } : {}),
+    ...(entry.origin?.kind === undefined ? {} : { origin: { kind: entry.origin.kind } }),
+    ...(message
+      ? {
+          message: {
+            ...(message.id === undefined ? {} : { id: message.id }),
+            ...(message.role === undefined ? {} : { role: message.role }),
+            ...(message.model === undefined ? {} : { model: message.model }),
+            ...(message.usage === undefined ? {} : { usage: message.usage }),
+            content,
+          },
+        }
+      : {}),
+  };
+};
+
+/**
+ * Calls `each` with every line of `path`, read a megabyte at a time, so a transcript of any size
+ * never sits in memory as one string.
+ */
+const forEachLine = (path: string, each: (line: string) => void): void => {
+  const fd = openSync(path, "r");
+  try {
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.alloc(1 << 20);
+    let rest = "";
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null);
+      if (read === 0) break;
+      const lines = (rest + decoder.write(buffer.subarray(0, read))).split("\n");
+      rest = lines.pop() ?? "";
+      for (const line of lines) each(line);
+    }
+    each(rest + decoder.end());
+  } finally {
+    closeSync(fd);
+  }
+};
+
+/** The lines of a transcript that parse, slimmed. A line that isn't JSON is skipped. */
+const readLines = (path: string): Entry[] => {
+  const entries: Entry[] = [];
+  forEachLine(path, (line) => {
+    if (!line) return;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (isEntry(parsed)) entries.push(slim(parsed));
+    } catch {
+      // Claude Code can leave a line half written.
+    }
+  });
+  return entries;
+};
 
 interface Session {
   id: string;
@@ -501,14 +616,18 @@ export const claudeProjectsDir = (
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string => join(env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), ".claude"), "projects");
 
-/** Reads the sessions in `projects` with an entry in the window, from the folders `runFolders` picks. */
-const readSessions = (
+/**
+ * Calls `each` with every session in `projects` that has a line in the window, one at a time, from
+ * the folders `runFolders` picks. A transcript last written before the window can't have a line in
+ * it, so it isn't read.
+ */
+const forEachSession = (
   projects: string,
   since: number,
   until: number,
   runFolders: RegExp | undefined,
-): Session[] => {
-  const sessions: Session[] = [];
+  each: (session: Session) => void,
+): void => {
   for (const project of readdirSync(projects).toSorted()) {
     if (runFolders && !runFolders.test(project)) continue;
     const dir = join(projects, project);
@@ -520,8 +639,14 @@ const readSessions = (
     }
     for (const file of files.toSorted()) {
       if (!file.endsWith(".jsonl")) continue;
+      const path = join(dir, file);
+      try {
+        if (statSync(path).mtimeMs < since) continue;
+      } catch {
+        continue;
+      }
       const id = file.slice(0, -".jsonl".length);
-      const all = readLines(join(dir, file));
+      const all = readLines(path);
       if (!all.some((e) => ms(e) >= since && ms(e) < until)) continue;
       // Subagents: their own files under the session's folder (workflow agents one level deeper),
       // or sidechain lines in the session itself.
@@ -536,10 +661,9 @@ const readSessions = (
               .flatMap((f) => readLines(join(subDir, f)))
           : []),
       ];
-      sessions.push({ id, main: all.filter((e) => !e.isSidechain), subEntries });
+      each({ id, main: all.filter((e) => !e.isSidechain), subEntries });
     }
   }
-  return sessions;
 };
 
 /** The Claude Code collector, reading the projects folder `options.env` names. */
@@ -579,22 +703,25 @@ export const claudeCodeCollector = (options: ClaudeCodeOptions = {}): Collector 
     };
     const { since, until, split } = query;
     const inWindow = (t: number) => t >= since && t < until;
-    const sessions = readSessions(projects, since, until, query.runFolders);
-    const rows: SessionRow[] = [];
-    const metrics: MetricResult[] = [];
-    for (const segment of split.segments) {
-      const selected = (t: number) => inWindow(t) && split.segmentOf(t) === segment;
-      const segmentRows = sessions
-        .map((session) => summarise(session, segment, selected, inWindow, addUsage))
+    const bySegment = new Map(split.segments.map((segment) => [segment, [] as SessionRow[]]));
+    // One session at a time, reduced to its rows before the next is read.
+    forEachSession(projects, since, until, query.runFolders, (session) => {
+      const anyRun = session.main.some((e) => isRunStart(e) && inWindow(ms(e)));
+      const first = session.main.find((e) => inWindow(ms(e)));
+      for (const segment of split.segments) {
+        const selected = (t: number) => inWindow(t) && split.segmentOf(t) === segment;
+        const row = summarise(session, segment, selected, inWindow, addUsage);
         // A session whose runs all fall in another segment belongs there. One with no run in the
         // window at all goes where its first line in the window does.
-        .filter((row, index) => {
-          if (row.runs.length > 0) return true;
-          const session = sessions[index];
-          const first = session?.main.find((e) => inWindow(ms(e)));
-          const anyRun = session?.main.some((e) => isRunStart(e) && inWindow(ms(e)));
-          return !anyRun && first !== undefined && split.segmentOf(ms(first)) === segment;
-        });
+        const belongs =
+          row.runs.length > 0 ||
+          (!anyRun && first !== undefined && split.segmentOf(ms(first)) === segment);
+        if (belongs) bySegment.get(segment)?.push(row);
+      }
+    });
+    const rows: SessionRow[] = [];
+    const metrics: MetricResult[] = [];
+    for (const [segment, segmentRows] of bySegment) {
       rows.push(...segmentRows);
       metrics.push(...metricsOf(segment, segmentRows));
     }
