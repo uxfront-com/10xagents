@@ -1,0 +1,8 @@
+id: unknown-workflow
+name: Unknown-Workflow
+description: A broken fixture.
+model: { id: test-model, thinking: low }
+concurrency: 1
+sections:
+  role: "Move it to {{workflows.nowhere.entry}}."
+  handback: The result.

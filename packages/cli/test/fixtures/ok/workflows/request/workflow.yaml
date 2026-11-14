@@ -1,0 +1,9 @@
+id: request
+entry: todo
+columns:
+  - { key: backlog, name: Backlog, handoff: none }
+  - { key: todo, name: Todo, category: fixed, handoff: "agent:lead", next: planning }
+  - { key: planning, name: Planning, handoff: "agent:planner", next: plan_review, back: todo }
+  - { key: plan_review, name: Plan Review, handoff: owner, next: in_progress, back: planning }
+  - { key: in_progress, name: In Progress, handoff: none, builders: [builder] }
+  - { key: done, name: Done, handoff: none }

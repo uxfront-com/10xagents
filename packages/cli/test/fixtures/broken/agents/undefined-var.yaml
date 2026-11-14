@@ -1,0 +1,8 @@
+id: undefined-var
+name: Undefined-Var
+description: A broken fixture.
+model: { id: test-model, thinking: low }
+concurrency: 1
+sections:
+  role: "Ask {{vars.nobody}}."
+  handback: The result.

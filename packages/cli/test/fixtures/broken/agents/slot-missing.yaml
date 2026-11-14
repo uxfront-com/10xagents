@@ -1,0 +1,9 @@
+id: slot-missing
+name: Slot-Missing
+description: A broken fixture.
+model: { id: test-model, thinking: low }
+concurrency: 1
+traits: [aside]
+sections:
+  role: You do one thing.
+  handback: The result.

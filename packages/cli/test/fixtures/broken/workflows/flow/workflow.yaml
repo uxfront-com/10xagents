@@ -1,0 +1,7 @@
+id: flow
+entry: todo
+columns:
+  - { key: todo, handoff: "agent:lead", next: done }
+  - { key: review, handoff: "agent:lead" }
+  - { key: done, handoff: none }
+  - { key: done, handoff: none }

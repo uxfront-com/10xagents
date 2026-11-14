@@ -1,0 +1,9 @@
+id: missing-template
+name: Missing-Template
+description: A broken fixture.
+model: { id: test-model, thinking: low }
+concurrency: 1
+template: missing
+sections:
+  role: You do one thing.
+  handback: The result.

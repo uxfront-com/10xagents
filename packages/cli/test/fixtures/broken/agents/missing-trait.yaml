@@ -1,0 +1,9 @@
+id: missing-trait
+name: Missing-Trait
+description: A broken fixture.
+model: { id: test-model, thinking: low }
+concurrency: 1
+traits: [nope]
+sections:
+  role: You do one thing.
+  handback: The result.

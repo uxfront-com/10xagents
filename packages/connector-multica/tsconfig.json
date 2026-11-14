@@ -3,7 +3,8 @@
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "lib": ["es2024"],
-    "types": ["node"]
+    "types": ["node"],
+    "customConditions": ["@10xagents/source"]
   },
   "include": ["src", "tsdown.config.ts"]
 }
