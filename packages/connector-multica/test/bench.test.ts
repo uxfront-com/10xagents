@@ -301,7 +301,7 @@ describe("bench: requests", () => {
     ];
     const { result } = await benchWith(
       benchState(),
-      query(compareSplit(log, ["aaa", "bbb"], UNTIL)),
+      query(compareSplit("team", log, ["aaa", "bbb"], UNTIL)),
     );
     const rows = table(result, "requests");
     // UXF-1 started before the first sync, so it counts under neither.

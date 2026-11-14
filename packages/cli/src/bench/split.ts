@@ -42,15 +42,18 @@ export const cutoverSplit = (cutover: number, until: number): BenchSplit => ({
 
 /**
  * One segment per setup hash in `hashes`. A run, session or request counts under the hash that was
- * live when it started, from `entries`, and is left out when another hash, or none, was live then.
+ * live for `target` when it started, from `entries`, and is left out when another hash, or none,
+ * was live then. The other targets' syncs in the same log don't count.
  */
 export const compareSplit = (
+  target: string,
   entries: readonly SyncLogEntry[],
   hashes: readonly string[],
   until: number,
 ): BenchSplit => {
+  const own = entries.filter((entry) => entry.target === target);
   const segmentOf = (time: number): string | undefined => {
-    const live = hashAt(entries, time);
+    const live = hashAt(own, time);
     return live !== undefined && hashes.includes(live) ? live : undefined;
   };
   return {

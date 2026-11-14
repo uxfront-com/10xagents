@@ -194,7 +194,7 @@ describe("the Claude Code collector", () => {
     ];
     const collected = await claudeCodeCollector({
       env: { CLAUDE_CONFIG_DIR: home },
-    }).collect(query(compareSplit(log, ["aaa", "bbb"], UNTIL)));
+    }).collect(query(compareSplit("t", log, ["aaa", "bbb"], UNTIL)));
     const { metrics } = collected;
     // The subagent's call and the compaction happened in the first run.
     expect(sessionsOf(collected)).toMatchObject([

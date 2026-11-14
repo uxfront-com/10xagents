@@ -250,6 +250,30 @@ describe("bench", () => {
     expect(err.at(-1)).toMatch(/target\.yaml: id: must be lower case/);
   });
 
+  it("keeps the connector's results when a collector fails, and says so", async () => {
+    const failing: Collector = {
+      id: "claude-code",
+      metrics: ["sessions"],
+      collect: () => Promise.reject(new Error("out of transcripts")),
+    };
+    const connector = fakeConnector({
+      capabilities: { ...fakeConnector().capabilities, metrics: ["requests"] },
+      bench: () => Promise.resolve({ metrics: [{ id: "requests", segment: "all", value: 4 }] }),
+    });
+    expect(
+      await bench(targetOnly(), ["--dir", ".", "--format", "json"], connector, [failing]),
+    ).toBe(0);
+    const result = report();
+    expect(result.metrics.find((metric) => metric.id === "requests")?.value).toBe(4);
+    expect(result.metrics.find((metric) => metric.id === "sessions")).toMatchObject({
+      value: null,
+      source: "claude-code",
+    });
+    expect(result.notes).toEqual([
+      "The claude-code collector failed, so its metrics are n/a: out of transcripts",
+    ]);
+  });
+
   it("stops with the connector's error, and exits 1", async () => {
     const connector = fakeConnector({
       capabilities: { ...fakeConnector().capabilities, metrics: ["requests"] },
@@ -326,12 +350,53 @@ describe("--compare", () => {
     );
   });
 
+  it("counts only the target's own syncs when the log holds another target's", async () => {
+    const shared = [
+      { target: "uxfront", setupHash: "aaaa1111", sources: ["."], time: "2026-11-05T00:00:00Z" },
+      { target: "n8n", setupHash: "nnnn9999", sources: ["."], time: "2026-11-05T00:01:00Z" },
+      { target: "uxfront", setupHash: "bbbb2222", sources: ["."], time: "2026-11-10T00:00:00Z" },
+      { target: "n8n", setupHash: "nnnn8888", sources: ["."], time: "2026-11-10T00:01:00Z" },
+    ];
+    const dir = targetOnly({
+      "targets/n8n/target.yaml": "id: n8n\nconnector: multica\nagents: []\n",
+      "sync-log.jsonl": `${shared.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    });
+    const starts = ["2026-11-07T00:00:00Z", "2026-11-12T00:00:00Z", "2026-11-04T00:00:00Z"];
+    const placed: (string | undefined)[] = [];
+    const connector = fakeConnector({
+      capabilities: { ...fakeConnector().capabilities, metrics: ["runs"] },
+      bench: ({ split }) => {
+        placed.push(...starts.map((start) => split.segmentOf(Date.parse(start))));
+        return Promise.resolve({ metrics: [] });
+      },
+    });
+    const args = ["--dir", ".", "--target", "uxfront", "--since", "2026-11-01"];
+    expect(
+      await bench(dir, [...args, "--compare", "aaaa", "bbbb", "--format", "json"], connector),
+    ).toBe(0);
+    expect(placed).toEqual(["aaaa1111", "bbbb2222", undefined]);
+    // n8n's hashes aren't uxfront's to compare.
+    expect(await bench(dir, [...args, "--compare", "aaaa", "nnnn9999"], connector)).toBe(1);
+    expect(err.at(-1)).toMatch(/no setup hash in sync-log\.jsonl starts with "nnnn9999"/);
+    writeFileSync(
+      join(dir, "sync-log.jsonl"),
+      `${shared
+        .filter((entry) => entry.target === "n8n")
+        .map((entry) => JSON.stringify(entry))
+        .join("\n")}\n`,
+    );
+    expect(await bench(dir, [...args, "--compare", "nnnn9999", "nnnn8888"], connector)).toBe(1);
+    expect(err.at(-1)).toMatch(
+      /needs a sync of target uxfront in .*sync-log\.jsonl, which has none/,
+    );
+  });
+
   it("leaves out runs under a hash it doesn't compare", () => {
     const entries = [
       ...log,
       { target: "uxfront", setupHash: "cccc3333", sources: ["."], time: "2026-11-15T00:00:00Z" },
     ];
-    const split = compareSplit(entries, ["aaaa1111", "cccc3333"], NOW);
+    const split = compareSplit("uxfront", entries, ["aaaa1111", "cccc3333"], NOW);
     expect(split.segmentOf(Date.parse("2026-11-12T00:00:00Z"))).toBeUndefined();
     expect(split.segmentOf(Date.parse("2026-11-16T00:00:00Z"))).toBe("cccc3333");
     expect(split.placeRequest(Date.parse("2026-11-06T00:00:00Z"), () => true)).toEqual({

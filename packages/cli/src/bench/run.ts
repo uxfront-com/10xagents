@@ -129,7 +129,10 @@ export interface BenchReport {
 }
 
 /** The window and split the options ask for. Throws a `BenchError` for a wrong flag. */
-const windowOf = (options: BenchOptions): { since: number; until: number; split: BenchSplit } => {
+const windowOf = (
+  options: BenchOptions,
+  target: BenchTarget,
+): { since: number; until: number; split: BenchSplit } => {
   const { now } = options;
   const since = parseMoment(options.since ?? "30", now);
   const until = options.until === undefined ? now : parseMoment(options.until, now);
@@ -171,7 +174,15 @@ const windowOf = (options: BenchOptions): { since: number; until: number; split:
     if (entries.length === 0) {
       throw new BenchError(`--compare needs ${join(options.dir, SYNC_LOG)}, which sync writes.`);
     }
-    const hashes = entries.map((entry) => entry.setupHash);
+    // Only this target's syncs: one setup logs every target it syncs.
+    const hashes = entries
+      .filter((entry) => entry.target === target.id)
+      .map((entry) => entry.setupHash);
+    if (hashes.length === 0) {
+      throw new BenchError(
+        `--compare needs a sync of target ${target.id} in ${join(options.dir, SYNC_LOG)}, which has none.`,
+      );
+    }
     let picked: string[];
     try {
       picked = options.compare.map((given) => matchHash(given, hashes));
@@ -180,7 +191,7 @@ const windowOf = (options: BenchOptions): { since: number; until: number; split:
     }
     if (picked[0] === picked[1])
       throw new BenchError("--compare takes two different setup hashes.");
-    return { since, until, split: compareSplit(entries, picked, until) };
+    return { since, until, split: compareSplit(target.id, entries, picked, until) };
   }
   return { since, until, split: wholeSplit(until) };
 };
@@ -188,7 +199,7 @@ const windowOf = (options: BenchOptions): { since: number; until: number; split:
 /** Runs the target's connector and every collector, and fills in `n/a` for the rest. */
 export const runBench = async (options: BenchOptions, deps: BenchDeps): Promise<BenchReport> => {
   const target = readBenchTarget(options.dir, options.target);
-  const { since, until, split } = windowOf(options);
+  const { since, until, split } = windowOf(options, target);
   const connector = await deps.loadConnector(target.connector);
   const query: BenchQuery = {
     target,
@@ -213,14 +224,22 @@ export const runBench = async (options: BenchOptions, deps: BenchDeps): Promise<
   }
   for (const collector of deps.collectors) {
     if (collector.metrics.length === 0) continue;
-    sources.push({
-      id: collector.id,
-      metrics: new Set(collector.metrics),
-      result: await collector.collect({
+    let result: BenchResult;
+    // A collector that fails leaves its metrics n/a, and the connector's results stand.
+    try {
+      result = await collector.collect({
         ...query,
         ...(connector.runFolders ? { runFolders: connector.runFolders } : {}),
-      }),
-    });
+      });
+    } catch (error) {
+      result = {
+        metrics: [],
+        notes: [
+          `The ${collector.id} collector failed, so its metrics are n/a: ${error instanceof Error ? error.message : String(error)}`,
+        ],
+      };
+    }
+    sources.push({ id: collector.id, metrics: new Set(collector.metrics), result });
   }
 
   const notes: string[] = [];
