@@ -35,6 +35,38 @@ export interface Change {
   diff?: string;
   /** Only a person can make this change, so the CLI prints it with `!` and exits 1. */
   manual?: boolean;
+  /**
+   * Only something to know, like a project the sync leaves alone. The CLI prints it with `·`,
+   * and `apply` never gets it.
+   */
+  note?: boolean;
+  /** What `apply` needs to make the change. Only the connector reads it. */
+  data?: unknown;
+}
+
+/** How `pull` reaches the platform: the account and the place the CLI was asked for. */
+export interface PullOptions {
+  /** The platform profile or account to use, from `--profile`. */
+  profile?: string;
+  /** The workspace to use instead of the target's, from `--workspace`. */
+  workspace?: string;
+  /** Asks the person running the CLI. Missing when there's no terminal to ask in. */
+  ask?: (question: string) => Promise<string>;
+  /** Prints a line, like the profile and workspace `pull` chose. */
+  log?: (line: string) => void;
+}
+
+/** What `apply` couldn't do. The others went through. */
+export interface ApplyResult {
+  failed: { change: Change; message: string }[];
+}
+
+/** A problem a connector finds in a rendered setup, which the platform would refuse. */
+export interface ConnectorIssue {
+  /** The file at fault. The default is the target's `target.yaml`. */
+  file?: string;
+  field: string;
+  message: string;
 }
 
 /** The window and setups that `bench` measures. */
@@ -57,9 +89,14 @@ export type ColumnNames = Record<string, Record<string, string>>;
 export interface Connector {
   id: string;
   capabilities: Capabilities;
-  pull(target: RenderedTarget): Promise<LiveState>;
+  /** Reads the platform's state for `target`. Throws when the platform can't be read. */
+  pull(target: RenderedTarget, options?: PullOptions): Promise<LiveState>;
+  /** What differs, as changes to apply, `manual` changes for a person and `note`s. */
   plan(rendered: RenderedSetup, live: LiveState): Promise<Change[]>;
-  apply(changes: Change[]): Promise<void>;
+  /** Makes `changes`, in order. A change that fails doesn't stop the others. */
+  apply(changes: Change[]): Promise<ApplyResult | void>;
+  /** The problems in `rendered` that the platform would refuse, checked before `pull`. */
+  validate?(rendered: RenderedSetup): ConnectorIssue[];
   bench?(query: BenchQuery): Promise<MetricResult[]>;
   /**
    * The platform name of each column of a target's workflows, given in the target's order.

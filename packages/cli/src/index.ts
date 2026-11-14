@@ -1,14 +1,17 @@
 // The `10xagents` library: the model, the renderer and the connector contract.
 
 export type {
+  ApplyResult,
   BenchQuery,
   Capabilities,
   Change,
   ColumnNames,
   Connector,
+  ConnectorIssue,
   LiveState,
   MetricId,
   MetricResult,
+  PullOptions,
 } from "./contract.ts";
 export { buildFiles, writeFiles } from "./build.ts";
 export { BUILT_IN_TEMPLATES } from "./default-template.ts";
@@ -22,6 +25,7 @@ export type {
   LoadedWorkflow,
   Param,
   Setup,
+  SkillFolder,
   SourceText,
   Template,
   Trait,
@@ -33,6 +37,7 @@ export type {
   RenderedAgent,
   RenderedColumn,
   RenderedSetup,
+  RenderedSkill,
   RenderedSquad,
   RenderedTarget,
   RenderedWorkflow,

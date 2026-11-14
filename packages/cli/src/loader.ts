@@ -52,6 +52,13 @@ export interface GlobalTrait {
   body: string;
 }
 
+/** A skill: a folder under `skills/`, named after the skill. A connector reads its files. */
+export interface SkillFolder {
+  name: string;
+  /** The folder's absolute path. */
+  dir: string;
+}
+
 export interface LoadedAgent {
   file: string;
   agent: Agent;
@@ -71,6 +78,8 @@ export interface LoadedTarget {
   templates: Map<string, Template>;
   traits: Map<string, Trait>;
   globals: GlobalTrait[];
+  /** `targets/<slug>/skills/`, by name. */
+  skills: Map<string, SkillFolder>;
   squad?: SourceText;
 }
 
@@ -82,6 +91,8 @@ export interface Setup {
   agents: Map<string, LoadedAgent>;
   workflows: Map<string, LoadedWorkflow>;
   targets: Map<string, LoadedTarget>;
+  /** `skills/`, by name: the skills every target gets. */
+  skills: Map<string, SkillFolder>;
   squad?: SourceText;
   /**
    * Files that exist but didn't load, as `<kind>:<path>`. A reference to one isn't reported
@@ -217,6 +228,14 @@ const loadGlobals = (dir: string, diagnostics: Diagnostics): GlobalTrait[] =>
     return [{ id: basename(name, ".md"), file, body: markdown.body }];
   });
 
+/** Every folder in `dir` is a skill, named after the folder. */
+const loadSkills = (dir: string): Map<string, SkillFolder> =>
+  new Map(
+    entries(dir)
+      .filter((name) => isDir(join(dir, name)))
+      .map((name) => [name, { name, dir: join(dir, name) }]),
+  );
+
 const loadAgents = (dir: string, diagnostics: Diagnostics, broken: Set<string>) => {
   const agents = new Map<string, LoadedAgent>();
   for (const name of filesWith(dir, [".yaml", ".yml"])) {
@@ -317,6 +336,7 @@ const loadTargets = (dir: string, diagnostics: Diagnostics, broken: Set<string>)
       templates: loadTemplates(join(targetDir, "templates"), diagnostics, broken),
       traits: loadTraits(join(targetDir, "traits"), diagnostics, broken),
       globals: loadGlobals(join(targetDir, "traits", "global"), diagnostics),
+      skills: loadSkills(join(targetDir, "skills")),
       ...(squad ? { squad } : {}),
     });
   }
@@ -337,6 +357,7 @@ export const loadSetup = (dir: string, diagnostics: Diagnostics): Setup => {
     agents: loadAgents(join(root, "agents"), diagnostics, broken),
     workflows: loadWorkflows(join(root, "workflows"), diagnostics, broken),
     targets: loadTargets(join(root, "targets"), diagnostics, broken),
+    skills: loadSkills(join(root, "skills")),
     ...(squad ? { squad } : {}),
     broken,
   };
