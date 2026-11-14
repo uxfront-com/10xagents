@@ -1,0 +1,30 @@
+{
+  "name": "10xagents-monorepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "changeset": "changeset",
+    "check-types": "pnpm -r check-types",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "10xagents": "workspace:*",
+    "@10xagents/connector-multica": "workspace:*",
+    "@changesets/cli": "^3.0.3",
+    "@uxfront/oxfmt-config": "^0.1.0",
+    "@uxfront/oxlint-config": "^0.1.0",
+    "oxfmt": "^0.70.0",
+    "oxlint": "^1.85.0",
+    "oxlint-tsgolint": "^7.0.2002",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.25.0"
+}

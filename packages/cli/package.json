@@ -1,0 +1,45 @@
+{
+  "name": "10xagents",
+  "version": "0.0.0",
+  "description": "A generic agent harness: validate a setup of templates, traits, agents and workflows, build the prompts, and sync them to a platform through a connector.",
+  "keywords": [
+    "agents",
+    "cli",
+    "harness",
+    "prompts"
+  ],
+  "homepage": "https://github.com/uxfront-com/10xagents/tree/main/packages/cli#readme",
+  "bugs": "https://github.com/uxfront-com/10xagents/issues",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uxfront-com/10xagents.git",
+    "directory": "packages/cli"
+  },
+  "bin": {
+    "10xagents": "./bin/10xagents.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "setups"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "tsdown && node scripts/copy-setups.mjs",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "citty": "^0.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@uxfront/typescript-config": "^0.1.0",
+    "tsdown": "^0.23.0",
+    "vitest": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

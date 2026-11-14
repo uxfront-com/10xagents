@@ -1,0 +1,21 @@
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+# The build copies the root setups/ here, so the package ships them.
+packages/cli/setups
+
+# Packed tarballs
+*.tgz
+
+# Testing
+coverage
+
+# Local env files
+.env
+.env.*
+
+# Misc
+.DS_Store
+*.log
