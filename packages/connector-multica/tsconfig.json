@@ -6,5 +6,5 @@
     "types": ["node"],
     "customConditions": ["@10xagents/source"]
   },
-  "include": ["src", "tsdown.config.ts"]
+  "include": ["src", "test", "tsdown.config.ts", "vitest.config.ts"]
 }
