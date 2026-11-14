@@ -3,7 +3,11 @@
 export type {
   ApplyResult,
   BenchQuery,
+  BenchResult,
+  BenchSplit,
+  BenchTarget,
   Capabilities,
+  Collector,
   Change,
   ColumnNames,
   Connector,
@@ -14,6 +18,27 @@ export type {
   Place,
   PullOptions,
 } from "./contract.ts";
+export {
+  CLAUDE_CODE_METRICS,
+  claudeCodeCollector,
+  claudeProjectsDir,
+} from "./bench/claude-code.ts";
+export type { ClaudeCodeOptions, SessionRow } from "./bench/claude-code.ts";
+export { METRICS, metricDefinition } from "./bench/catalogue.ts";
+export type { MetricDefinition, MetricGroup, MetricUnit } from "./bench/catalogue.ts";
+export { BenchError, formatReport, readBenchTarget, runBench } from "./bench/run.ts";
+export type { BenchDeps, BenchOptions, BenchReport, ReportMetric } from "./bench/run.ts";
+export { compareSplit, cutoverSplit, parseMoment, wholeSplit } from "./bench/split.ts";
+export {
+  appendSyncLog,
+  hashAt,
+  matchHash,
+  readSyncLog,
+  setupHash,
+  SYNC_LOG,
+  SyncLogError,
+} from "./bench/sync-log.ts";
+export type { SyncLogEntry } from "./bench/sync-log.ts";
 export { buildFiles, writeFiles } from "./build.ts";
 export { defineConfig, loadConfig, readLock } from "./config.ts";
 export type { Config, ConfigInput, Lock, LockEntry } from "./config.ts";
@@ -26,6 +51,8 @@ export { initSetup, installSetup } from "./install.ts";
 export { openSetup, resolveLayers } from "./layers.ts";
 export type { LockMode, Opened, OpenedLayer, Resolution, SourceOptions } from "./layers.ts";
 export { loadLayer, loadSetup, mergeLayers } from "./loader.ts";
+export { createMain, runCli } from "./main.ts";
+export type { CliContext } from "./main.ts";
 export type {
   GlobalTrait,
   Layer,

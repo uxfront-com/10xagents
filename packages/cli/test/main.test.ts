@@ -112,9 +112,12 @@ describe("10xagents", () => {
     }
   });
 
-  it.each(["bench"])("%s exits 1, not available yet", async (name) => {
-    expect(await cli(tempDir(), [name])).toBe(1);
-    expect(err).toEqual([`10xagents ${name} is not available yet.`]);
+  it("bench exits 1 without a setup folder", async () => {
+    const dir = tempDir();
+    expect(await cli(dir, ["bench"])).toBe(1);
+    expect(err).toEqual([
+      `${join(dir, ".10xagents")}: bench reads a setup folder on this machine, and there's none here`,
+    ]);
   });
 });
 

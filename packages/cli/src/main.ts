@@ -1,22 +1,27 @@
+import { mkdirSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 
-import { defineCommand } from "citty";
+import { defineCommand, runCommand } from "citty";
 import type { CommandDef } from "citty";
 
 import pkg from "../package.json" with { type: "json" };
+import { claudeCodeCollector } from "./bench/claude-code.ts";
+import { BenchError, formatReport, runBench } from "./bench/run.ts";
+import { appendSyncLog, setupHash, SYNC_LOG } from "./bench/sync-log.ts";
 import { buildFiles, writeFiles } from "./build.ts";
 import type { Config } from "./config.ts";
-import type { Capabilities, Change, Connector, PullOptions } from "./contract.ts";
+import type { Capabilities, Change, Collector, Connector, PullOptions } from "./contract.ts";
 import { Diagnostics, formatDiagnostic } from "./diagnostics.ts";
 import { defaultCacheDir, githubFetcher } from "./fetch.ts";
 import { initSetup, installSetup } from "./install.ts";
 import { defaultBundledDir, openSetup } from "./layers.ts";
-import type { SourceOptions } from "./layers.ts";
+import type { Opened, SourceOptions } from "./layers.ts";
 import type { LoadedTarget, Setup } from "./loader.ts";
 import { ConnectorError, findConnectors, loadConnector } from "./registry.ts";
 import { renderTarget } from "./render.ts";
 import type { RenderedSetup } from "./render.ts";
+import { formatSource } from "./source.ts";
 import { validateSetup } from "./validate.ts";
 
 /** What the commands reach outside the setup. Tests pass their own. */
@@ -28,6 +33,10 @@ export interface CliContext {
   sources: () => SourceOptions;
   /** Asks the person running the CLI, or is missing when there's no terminal to ask in. */
   ask?: ((question: string) => Promise<string>) | undefined;
+  /** The collectors `bench` runs beside the connector. */
+  collectors: () => Collector[];
+  /** Now, in milliseconds since the epoch. */
+  now: () => number;
 }
 
 /** Asks on the terminal, when standard input is one. */
@@ -190,12 +199,17 @@ const planLive = async (
   }
 };
 
-/** A command that a later release adds. It exits 1. */
-const notYet = (name: string, description: string): CommandDef =>
-  defineCommand({
-    meta: { name, description },
-    run: () => fail([`10xagents ${name} is not available yet.`]),
+/** Every value of a flag given more than once, as `--name x` or `--name=x`, else `fallback`. */
+const repeated = (rawArgs: readonly string[], name: string, fallback: string): string[] => {
+  const values: string[] = [];
+  rawArgs.forEach((arg, index) => {
+    if (arg === `--${name}`) {
+      const next = rawArgs[index + 1];
+      if (next !== undefined && !next.startsWith("-")) values.push(next);
+    } else if (arg.startsWith(`--${name}=`)) values.push(arg.slice(name.length + 3));
   });
+  return values.length > 0 ? values : [fallback];
+};
 
 export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
   const ctx: CliContext = {
@@ -208,6 +222,8 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       bundledDir: defaultBundledDir(),
     }),
     ask: terminalAsk(),
+    collectors: () => [claudeCodeCollector()],
+    now: () => Date.now(),
     ...context,
   };
 
@@ -359,7 +375,7 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
   const prepare = async (
     dir: string,
     given: string | undefined,
-  ): Promise<{ connector: Connector; rendered: RenderedSetup } | undefined> => {
+  ): Promise<{ connector: Connector; rendered: RenderedSetup; opened: Opened } | undefined> => {
     const cwd = ctx.cwd();
     const diagnostics = new Diagnostics();
     const labels = new Map<string, string>();
@@ -393,7 +409,7 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       printDiagnostics(diagnostics, cwd, labels);
       return undefined;
     }
-    return { connector, rendered };
+    return { connector, rendered, opened };
   };
 
   const liveArgs = {
@@ -411,6 +427,35 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
     ...(ctx.ask ? { ask: ctx.ask } : {}),
   });
 
+  /**
+   * Appends the sync to `sync-log.jsonl`: in the setup's folder, or in `./.10xagents` for a setup
+   * from GitHub or a bundled name. Local layers are named relative to the setup, so the log holds
+   * no paths of this machine.
+   */
+  const logSync = (opened: Opened, rendered: RenderedSetup, time: string): void => {
+    const root = opened.resolution.layers[0];
+    const dir = opened.local && root ? root.dir : resolve(ctx.cwd(), ".10xagents");
+    const sources = opened.resolution.layers.map((layer) => {
+      if (layer.remote) return formatSource({ ...layer.remote.source, ref: layer.remote.sha });
+      // A local layer's source is its folder; a bundled one's, its name.
+      if (layer.source !== layer.dir) return layer.source;
+      return relative(dir, layer.dir).split(sep).join("/") || ".";
+    });
+    try {
+      mkdirSync(dir, { recursive: true });
+      appendSyncLog(dir, {
+        target: rendered.target.id,
+        setupHash: setupHash(rendered),
+        sources,
+        time,
+      });
+    } catch (error) {
+      fail([
+        `Applied, but couldn't write ${SYNC_LOG}: ${error instanceof Error ? error.message : String(error)}`,
+      ]);
+    }
+  };
+
   const plan = defineCommand({
     meta: {
       name: "plan",
@@ -427,7 +472,10 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
   });
 
   const sync = defineCommand({
-    meta: { name: "sync", description: "Apply the diff after you confirm" },
+    meta: {
+      name: "sync",
+      description: "Apply the diff after you confirm, then log the setup hash to sync-log.jsonl",
+    },
     args: {
       ...liveArgs,
       "dry-run": {
@@ -458,6 +506,7 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
           return;
         }
       }
+      const started = new Date(ctx.now()).toISOString();
       let result;
       try {
         result = await connector.apply(toApply);
@@ -465,6 +514,8 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
         return fail([`Stopped: ${error instanceof Error ? error.message : String(error)}`]);
       }
       const failed = result?.failed ?? [];
+      // Something changed, so the setup that's live from now on goes in the log.
+      if (failed.length < toApply.length) logSync(prepared.opened, rendered, started);
       if (failed.length > 0) {
         fail(failed.map(({ change, message }) => `Failed: ${change.summary}: ${message}`));
       }
@@ -484,6 +535,87 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
         );
         process.exitCode = 1;
       } else if (failed.length === 0) say(`Applied; ${planned.name} now matches the setup.`);
+    },
+  });
+
+  const bench = defineCommand({
+    meta: {
+      name: "bench",
+      description:
+        "Run every metric the connector and collectors support, over a window. The rest show as n/a",
+    },
+    args: {
+      dir: { ...dirArg, description: "The setup's folder. Only the target's target.yaml is read" },
+      target: targetArg,
+      since: {
+        type: "string",
+        description: "Where the window starts: days back, or a local date and time",
+        default: "30",
+      },
+      until: {
+        type: "string",
+        description: "Where the window ends: days back, or a local date and time. Default: now",
+      },
+      cutover: {
+        type: "string",
+        description: "Split the window at this local date and time: before, across and after",
+      },
+      compare: {
+        type: "string",
+        description: "Compare two setup hashes from sync-log.jsonl: --compare <hashA> <hashB>",
+      },
+      "review-step": {
+        type: "string",
+        description: "A status key where reviewers review delivered work (repeatable)",
+        default: "quality_assurance",
+      },
+      "plan-step": {
+        type: "string",
+        description: "A status key where reviewers review plans (repeatable)",
+        default: "plan_review",
+      },
+      profile: { type: "string", description: "The platform profile to use" },
+      format: { type: "string", description: "text or json", default: "text" },
+    },
+    run: async ({ args, rawArgs }) => {
+      if (args.format !== "text" && args.format !== "json") {
+        return fail(["--format takes text or json."]);
+      }
+      const json = args.format === "json";
+      const cwd = ctx.cwd();
+      const compare =
+        args.compare === undefined ? undefined : [args.compare, ...args._.slice(0, 1)];
+      let report;
+      try {
+        report = await runBench(
+          {
+            dir: resolve(cwd, args.dir),
+            target: args.target,
+            since: args.since,
+            until: args.until,
+            cutover: args.cutover,
+            compare,
+            reviewSteps: repeated(rawArgs, "review-step", args["review-step"]),
+            planSteps: repeated(rawArgs, "plan-step", args["plan-step"]),
+            profile: args.profile,
+            now: ctx.now(),
+            ask: ctx.ask,
+            // JSON goes to standard output alone, so progress goes to standard error.
+            log: json ? (line) => console.error(line) : say,
+          },
+          {
+            loadConnector: (id) => ctx.loadConnector(id, { cwd }),
+            collectors: ctx.collectors(),
+          },
+        );
+      } catch (error) {
+        if (error instanceof BenchError || error instanceof ConnectorError) {
+          return fail([error.message]);
+        }
+        return fail([`Stopped: ${error instanceof Error ? error.message : String(error)}`]);
+      }
+      if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+      else for (const line of formatReport(report)) say(line);
     },
   });
 
@@ -521,10 +653,21 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       build,
       plan,
       sync,
-      bench: notYet("bench", "Run every metric the connector and collectors support"),
+      bench,
       connectors,
     },
   });
 };
 
 export const main: CommandDef = createMain();
+
+/**
+ * Runs the CLI on `rawArgs`, like `["sync", "--dry-run"]`, reaching outside the setup through
+ * `context`. It sets `process.exitCode` as the command line does.
+ */
+export const runCli = async (
+  rawArgs: string[],
+  context: Partial<CliContext> = {},
+): Promise<void> => {
+  await runCommand(createMain(context), { rawArgs });
+};
