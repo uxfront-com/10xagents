@@ -68,4 +68,6 @@ Write `.changeset/<branch-slug>.md` with one line per changed package, then one 
 Add `10xagents validate`, which checks every agent, template and workflow of a setup and prints each error with its file and line.
 ```
 
-A change under `setups/` is a change to `10xagents`, since the package bundles the setups. Both packages are still 0.x, so a new feature or a breaking change is a `minor`, and a fix is a `patch`. A breaking change ends its summary with a `**Breaking:**` sentence that says what to change. A `major` is the owner's call. Changesets and commits never mention ticket keys, customer names, private URLs or internal notes.
+A change under `setups/` is a change to `10xagents`, since the package bundles the setups. Both packages are still 0.x, so a new feature or a breaking change is a `minor`, and a fix is a `patch`. A breaking change ends its summary with a `**Breaking:**` sentence that says what to change. A `major` is the owner's call.
+
+Changesets and commits never mention ticket keys, customer names, private URLs or internal notes.
