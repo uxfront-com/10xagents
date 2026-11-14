@@ -126,7 +126,7 @@ export const renderTarget = (
   /** A path from `target.yaml`, inside the setup. Reports it when it isn't there. */
   const targetFile = (path: string, field: string): SourceText | undefined => {
     const file = resolve(loaded.dir, path);
-    const inside = relative(setup.dir, file);
+    const inside = relative(loaded.root, file);
     if (inside.startsWith("..") || isAbsolute(inside)) {
       atTarget(field, `${path} is outside the setup`);
       return undefined;
