@@ -224,8 +224,8 @@ describe("the Claude Code collector", () => {
     const home = tempDir();
     const runs = join(home, "projects", "-runs-multica-workspaces-profile-team");
     mkdirSync(runs, { recursive: true });
-    // 1.5 million two-byte characters: the output crosses the 1 MB reads, mid-character.
-    const big = "é".repeat(1_500_000);
+    // 1.5 million three-byte characters: the output crosses the 1 MB reads, mid-character.
+    const big = "€".repeat(1_500_000);
     const lines = [
       user(at(2), "Start the work."),
       call(at(2, 1), "m1", { input_tokens: 1 }, [toolUse("t1", "Read", { file_path: "/a/b.md" })]),
