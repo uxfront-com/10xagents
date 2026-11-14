@@ -65,6 +65,14 @@ const cli = async (
           );
     },
     findConnectors: () => Object.keys(connectors).toSorted(),
+    sources: () => ({
+      fetcher: {
+        resolveRef: () => Promise.reject(new Error("no network in tests")),
+        download: () => Promise.reject(new Error("no network in tests")),
+      },
+      cacheDir: join(cwd, ".cache"),
+      bundledDir: join(cwd, ".bundled"),
+    }),
   });
   await runCommand(command, { rawArgs });
   const code = process.exitCode ?? 0;
@@ -102,13 +110,10 @@ describe("10xagents", () => {
     }
   });
 
-  it.each(["init", "install", "plan", "sync", "bench"])(
-    "%s exits 1, not available yet",
-    async (name) => {
-      expect(await cli(tempDir(), [name])).toBe(1);
-      expect(err).toEqual([`10xagents ${name} is not available yet.`]);
-    },
-  );
+  it.each(["plan", "sync", "bench"])("%s exits 1, not available yet", async (name) => {
+    expect(await cli(tempDir(), [name])).toBe(1);
+    expect(err).toEqual([`10xagents ${name} is not available yet.`]);
+  });
 });
 
 describe("validate", () => {
