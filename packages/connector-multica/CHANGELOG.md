@@ -1,5 +1,16 @@
 # @10xagents/connector-multica
 
+## 0.1.1
+
+### Patch Changes
+
+- 560c8a0: `10xagents` now bundles `starter`, a lead, a builder and a reviewer on one `request` workflow, in place of Ultracode, and `init` extends `starter` by default. The `@10xagents/connector-multica` README's examples use the starter.
+
+  **Breaking:** the bundled setup `ultracode` is gone, so `extends: ["ultracode"]` and `--from ultracode` fail. Extend `starter`, or a setup of your own.
+
+- Updated dependencies [560c8a0]
+  - 10xagents@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes
