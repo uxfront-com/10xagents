@@ -117,6 +117,13 @@ export const TargetSchema = v.strictObject({
 });
 export type Target = v.InferOutput<typeof TargetSchema>;
 
+/** The only fields of a target that `bench` reads. It ignores the rest. */
+export const BenchTargetSchema = v.object({
+  id: Id,
+  workspace: v.optional(Text),
+  connector: Id,
+});
+
 /** A schema error, as a field path and a message. */
 export interface SchemaIssue {
   field: string;

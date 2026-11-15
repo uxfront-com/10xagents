@@ -4,6 +4,7 @@
 // its working directory and its MULTICA_* variables.
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const statePath = process.env.FAKE_MULTICA_STATE;
 if (!statePath) {
@@ -217,6 +218,41 @@ if (a === "workflow" && b === "update") {
   });
   workflow.steps = written;
   out({ id: workflow.id, steps: written });
+}
+// What `bench` reads: issues, their runs, timelines and comments, and attachments.
+if (a === "issue" && b === "list") {
+  scoped();
+  const offset = Number(flag("--offset") ?? 0);
+  const limit = Number(flag("--limit") ?? 100);
+  const issues = state.issues ?? [];
+  out({ issues: issues.slice(offset, offset + limit), has_more: offset + limit < issues.length });
+}
+if (a === "issue" && b === "runs") {
+  scoped();
+  out(state.runs?.[c] ?? []);
+}
+if (a === "issue" && b === "timeline") {
+  scoped();
+  if (state.noTimeline) fail('Error: unknown command "timeline" for "multica issue"');
+  const action = flag("--action");
+  const entries = (state.timelines?.[c] ?? []).filter((e) => !action || e.action === action);
+  if (state.truncated?.[c]) {
+    process.stderr.write(`warning: timeline truncated by the server cap (${state.truncated[c]})\n`);
+  }
+  out(entries);
+}
+if (a === "issue" && b === "comment" && c === "list") {
+  scoped();
+  out(state.comments?.[args[3]] ?? []);
+}
+if (a === "attachment" && b === "download") {
+  scoped();
+  const attachment = state.attachments?.[c] ?? fail(`no attachment ${c}`);
+  const path = join(flag("-o"), attachment.filename);
+  writeFileSync(path, attachment.text);
+  save();
+  process.stdout.write(JSON.stringify({ path }));
+  process.exit(0);
 }
 if (a === "project" && b === "list") {
   scoped();
