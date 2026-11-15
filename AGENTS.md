@@ -39,7 +39,7 @@ The code is TypeScript 7, strict, with `noUncheckedIndexedAccess` and `verbatimM
 
 ## Rules
 
-- `.github/workflows/release.yml` is the only job that releases. On a merge to `main` with pending changesets, it opens the `chore: release packages` pull request, and only the owner merges it. That merge publishes to npm through a trusted publisher, with no token. Never add another publish or deploy job, and never edit a `version` field or a `CHANGELOG.md` by hand.
+- `.github/workflows/changesets.yml` is the only job that releases. On a merge to `main` with pending changesets, it opens the `chore: release packages` pull request, and only the owner merges it. That merge publishes to npm through a trusted publisher, with no token. Never add another publish or deploy job, and never edit a `version` field or a `CHANGELOG.md` by hand.
 - In workflows, pin every action to a full commit SHA, and keep `permissions` at `contents: read`. Only the release job gets more, and only what it needs.
 - The repository is private, but the packages and their READMEs are public on npm, and so is everything under `setups/`. Write setups public-safe: no names, private URLs, secrets or details of one workspace.
 - Tests never read a real platform. A test that needs a Multica profile uses a fake one.
