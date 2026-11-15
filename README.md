@@ -9,7 +9,6 @@ A setup holds the agents, the templates their prompts render from, the traits th
 | [`10xagents`](packages/cli)                                  | The CLI (bin `10xagents`), the schemas, the renderer, the built-in `default` template, the connector contract and `bench` |
 | [`@10xagents/connector-multica`](packages/connector-multica) | The Multica connector: `plan`, `sync` and `bench` against a Multica workspace                                             |
 | [`setups/starter`](setups/starter)                           | The starter, bundled inside `10xagents` as the setup named `starter`                                                      |
-| [`ultracode`](ultracode)                                     | Ultracode, a squad of seven agents. Private: it doesn't ship in the package                                               |
 
 ## Install
 
@@ -448,18 +447,6 @@ A share is a ratio from 0 to 1, and a cost is in US dollars at list prices. A p5
 | `tool-output-images`          | count  | Images in tool output, by tool                                                 | Claude Code |
 
 A connector or collector that reports an id the catalogue doesn't know gets a note in the report, rather than a row.
-
-## Ultracode
-
-Ultracode is a squad of seven agents that takes a request from triage to review on Multica: a Dispatcher, a Planner, a Designer, a Builder, QA, a Writer and Ops. Its [README](ultracode/README.md) covers the seats, how the work moves and how to measure it.
-
-Ultracode lives in `ultracode/`, outside `setups/`, so the `10xagents` package doesn't ship it. A setup that has access to this repository extends it from GitHub, with `GITHUB_TOKEN` set to a token that can read it:
-
-```ts
-export default {
-  extends: ["github:uxfront-com/10xagents/ultracode#main"],
-};
-```
 
 ## Developing
 

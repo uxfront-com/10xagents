@@ -9,7 +9,6 @@ This monorepo holds 10xagents, a generic agent harness. A setup describes templa
 | `packages/cli`               | `10xagents`                    | The CLI (bin `10xagents`), the schemas, the renderer and the connector contract.                             |
 | `packages/connector-multica` | `@10xagents/connector-multica` | The Multica connector: sync and bench. It imports only types from `10xagents`, as a peer dependency.         |
 | `setups/`                    | inside `10xagents`             | The bundled setups. The `10xagents` build copies them into `packages/cli/setups`, so the package ships them. |
-| `ultracode/`                 | private, not shipped           | Ultracode. It stays out of `setups/`, so no package ships it. Setups extend it from GitHub.                  |
 
 `10xagents` never depends on a connector, so the workspace graph has no cycle. The root depends on both packages, so `pnpm exec 10xagents` works from the root.
 
@@ -43,12 +42,12 @@ The code is TypeScript 7, strict, with `noUncheckedIndexedAccess` and `verbatimM
 - `.github/workflows/changesets.yml` is the only job that releases. On a merge to `main` with pending changesets, it opens the `chore: release packages` pull request, and only the owner merges it. That merge publishes to npm through a trusted publisher, with no token. Never add another publish or deploy job, and never edit a `version` field or a `CHANGELOG.md` by hand.
 - In workflows, pin every action to a full commit SHA, and keep `permissions` at `contents: read`. Only the release job gets more, and only what it needs.
 - The repository is private, but the packages and their READMEs are public on npm, and so is everything under `setups/`. Write setups public-safe: no names, private URLs, secrets or details of one workspace.
-- Ultracode is sold, so it never ships. Keep it in `ultracode/`, never under `setups/`, and keep the package READMEs from documenting it. `the bundled setups` in `packages/cli/test/starter.test.ts` fails when `setups/` holds anything but `starter`.
+- Paid setups live in their own private repositories and never land here. `the bundled setups` in `packages/cli/test/starter.test.ts` fails when `setups/` holds anything but `starter`.
 - Tests never read a real platform. A test that needs a Multica profile uses a fake one.
 
 ## Commits, pull requests and changesets
 
-Pull requests are squash-merged, so the title becomes the commit. Write it in [Conventional Commits](https://www.conventionalcommits.org), with the scope `cli`, `connector-multica` or `ultracode`. Leave the scope out for a change across packages, and use the `ci` type for workflows:
+Pull requests are squash-merged, so the title becomes the commit. Write it in [Conventional Commits](https://www.conventionalcommits.org), with the scope `cli` or `connector-multica`. Leave the scope out for a change across packages, and use the `ci` type for workflows:
 
 ```text
 feat(cli): validate a setup's agents before building the prompts
@@ -70,6 +69,6 @@ Write `.changeset/<branch-slug>.md` with one line per changed package, then one 
 Add `10xagents validate`, which checks every agent, template and workflow of a setup and prints each error with its file and line.
 ```
 
-A change under `setups/` is a change to `10xagents`, since the package bundles the setups. A change under `ultracode/` ships in no package, so it takes no changeset. Both packages are still 0.x, so a new feature or a breaking change is a `minor`, and a fix is a `patch`. A breaking change ends its summary with a `**Breaking:**` sentence that says what to change. A `major` is the owner's call.
+A change under `setups/` is a change to `10xagents`, since the package bundles the setups. Both packages are still 0.x, so a new feature or a breaking change is a `minor`, and a fix is a `patch`. A breaking change ends its summary with a `**Breaking:**` sentence that says what to change. A `major` is the owner's call.
 
 Changesets and commits never mention ticket keys, customer names, private URLs or internal notes.
