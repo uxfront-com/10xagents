@@ -1,8 +1,0 @@
----
-"10xagents": minor
-"@10xagents/connector-multica": minor
----
-
-Add `10xagents bench`, which measures how a setup works on its platform over a window, and shows every metric it can't measure as `n/a`, never as 0. It reports the metrics of a shared catalogue (`METRICS`), in four groups: outcome, review, cost and time, and context. The Multica connector measures requests, from their first run to Done, the time each seat's runs wait and run, what they cost, why they fail, QA's review cycles and the old setup's verdicts. The Claude Code collector (`claudeCodeCollector`) reads the transcripts in `$CLAUDE_CONFIG_DIR/projects`, or `~/.claude/projects`, for the context at a run's start, compactions, subagents, skill loads and the tool output that fills the context. `bench` takes `--since` and `--until`, as days back or a local date and time, `--cutover`, which splits requests into `before`, `across` and `after`, `--compare <hashA> <hashB>`, `--review-step` and `--plan-step` (both repeatable), `--profile` and `--format json`, whose rows hold counts, times and costs, never titles or comment text. It reads only the target's `id`, `workspace` and `connector`, so a setup with one `target.yaml` is enough.
-
-`sync` now appends `{ target, setupHash, sources, time }` to `sync-log.jsonl` after it applies changes, so `bench --compare` can tell which setup was live when each run started. The `Connector` contract changes with it: `bench` takes a `BenchQuery` with the window, a `BenchSplit` and the review and plan steps, and returns a `BenchResult` with rows and notes beside the metrics, a connector can name its agents' Claude Code folders with `runFolders`, and the library exports `runCli` to run the command line from code.
