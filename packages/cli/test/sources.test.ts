@@ -115,7 +115,7 @@ describe("parseSource", () => {
   });
 
   it("reads a bare name as a bundled setup", () => {
-    expect(parseSource("ultracode", "/x")).toEqual({ kind: "bundled", name: "ultracode" });
+    expect(parseSource("starter", "/x")).toEqual({ kind: "bundled", name: "starter" });
   });
 
   it.each([
@@ -136,11 +136,11 @@ describe("parseSource", () => {
   });
 
   it("reads --dir paths without ./, and a bare name as a local folder first", () => {
-    const cwd = writeSetup({ "ultracode/.keep": "" });
+    const cwd = writeSetup({ "starter/.keep": "" });
     expect(parseDirSource("setups/x", cwd)).toEqual({ kind: "local", path: join(cwd, "setups/x") });
-    expect(parseDirSource("ultracode", cwd)).toEqual({
+    expect(parseDirSource("starter", cwd)).toEqual({
       kind: "local",
-      path: join(cwd, "ultracode"),
+      path: join(cwd, "starter"),
     });
     expect(parseDirSource("other", cwd)).toEqual({ kind: "bundled", name: "other" });
     expect(parseDirSource(".10xagents", cwd).kind).toBe("local");
@@ -721,14 +721,14 @@ describe("init", () => {
     const dir = tempDir();
     writeFileSync(
       join(dir, "10xagents.config.ts"),
-      configText({ extends: ["ultracode", "github:o/r#main"], target: "t" }),
+      configText({ extends: ["starter", "github:o/r#main"], target: "t" }),
     );
     expect(existsSync(join(dir, "node_modules"))).toBe(false);
     const diagnostics = new Diagnostics();
     const loaded = await loadConfig(dir, diagnostics);
     expect(diagnostics.list).toEqual([]);
     expect(loaded.config).toEqual({
-      extends: ["ultracode", "github:o/r#main"],
+      extends: ["starter", "github:o/r#main"],
       target: "t",
       connectors: {},
     });

@@ -241,7 +241,7 @@ const labelOf = (block: Block): string => {
 
 // Which seat a session belongs to: the platform's brief in the working directory names it
 // ("**You are: QA**"); once that directory is gone, the skills the session loaded tell the seats
-// of the Ultracode squad apart.
+// of a squad apart.
 const seatOf = (cwd: string, skills: ReadonlySet<string>): string => {
   try {
     const brief = readFileSync(join(cwd, "CLAUDE.md"), "utf8");
