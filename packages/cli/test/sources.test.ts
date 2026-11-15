@@ -681,6 +681,35 @@ describe("init", () => {
     );
   });
 
+  it("writes into the new folder a plain --dir names, even a bundled setup's name", async () => {
+    const bundled = writeSetup(under("starter", baseFiles()));
+    const github = acme();
+    const options = sourceOptions(github, bundled);
+    const cwd = tempDir();
+    expect(await cli(cwd, ["init", "--dir", "my-setup", "--target", "main"], options)).toBe(0);
+    expect(readFileSync(join(cwd, "my-setup/10xagents.config.ts"), "utf8")).toContain(
+      'extends: ["starter"]',
+    );
+    expect(existsSync(join(cwd, "my-setup/targets/main/target.yaml"))).toBe(true);
+    expect(existsSync(join(cwd, "my-setup", LOCK_FILE))).toBe(true);
+    expect(await cli(cwd, ["validate", "--dir", "my-setup"], options)).toBe(0);
+
+    expect(await cli(cwd, ["init", "--dir", "starter", "--target", "main"], options)).toBe(0);
+    expect(readFileSync(join(cwd, "starter/10xagents.config.ts"), "utf8")).toContain(
+      'extends: ["starter"]',
+    );
+    expect(existsSync(join(bundled, "starter", LOCK_FILE))).toBe(false);
+
+    output.err = [];
+    expect(await cli(cwd, ["init", "--dir", "gh:acme/agents", "--target", "main"], options)).toBe(
+      1,
+    );
+    expect(output.err[0]).toBe(
+      "--dir: gh:acme/agents: is not a local folder: init writes a setup into one",
+    );
+    expect(github.resolved).toEqual([]);
+  });
+
   it("writes a local --from relative to the setup's folder, and locks a GitHub one", async () => {
     const github = acme();
     const options = sourceOptions(github);

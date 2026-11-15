@@ -39,6 +39,9 @@ const REF = /^[A-Za-z0-9._/@+-]+$/;
 export const BUNDLED_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 export const SHA = /^[0-9a-f]{40}$/;
 
+/** A GitHub source: `github:<owner>/<repo>…`, or `gh:` for short. */
+export const isGitHubSpec = (spec: string): boolean => GITHUB_PREFIX.test(spec);
+
 /** A path: `.`, `..`, or one that starts with `./`, `../` or `/`. */
 export const isLocalPath = (spec: string): boolean =>
   spec === "." ||

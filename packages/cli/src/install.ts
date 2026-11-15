@@ -1,7 +1,7 @@
 // `install` pins a setup's remote sources in its lock, and `init` writes a new setup.
 
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { basename, join, relative, sep } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 
 import { stringify } from "yaml";
 
@@ -12,7 +12,7 @@ import type { OpenedLayer, SourceOptions } from "./layers.ts";
 import { openRoot, resolveLayers } from "./layers.ts";
 import { loadLayer, mergeLayers } from "./loader.ts";
 import type { Setup } from "./loader.ts";
-import { formatSource, parseDirSource, SourceError } from "./source.ts";
+import { formatSource, isGitHubSpec, parseDirSource, SourceError } from "./source.ts";
 
 export interface Installed {
   dir: string;
@@ -111,9 +111,9 @@ export interface Initialized {
 }
 
 /**
- * Writes a new setup in the local folder `spec`: a config extending `from`, a starter target and the
- * lock. The config is a plain object with no import, so it loads where `10xagents` isn't installed.
- * Writes nothing on any error.
+ * Writes a new setup in the local folder `spec`, resolved from `cwd`: a config extending `from`, a
+ * starter target and the lock. A bare name is a folder, never a bundled setup. The config is a plain
+ * object with no import, so it loads where `10xagents` isn't installed. Writes nothing on any error.
  */
 export const initSetup = async (
   spec: string,
@@ -123,12 +123,13 @@ export const initSetup = async (
   options: SourceOptions,
   diagnostics: Diagnostics,
 ): Promise<Initialized | undefined> => {
-  const root = await openRoot(spec, cwd, options, diagnostics);
-  if (!root) return undefined;
-  if (!root.local) {
+  if (isGitHubSpec(spec)) {
     diagnostics.add("--dir", spec, "is not a local folder: init writes a setup into one");
     return undefined;
   }
+  // `--dir` is the folder to write into, so a bare name is a new folder, never a bundled setup.
+  const root = await openRoot(resolve(cwd, spec), cwd, options, diagnostics);
+  if (!root) return undefined;
   const { dir } = root.layer;
   const existing = findConfig(dir);
   if (existing) {
