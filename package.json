@@ -10,6 +10,7 @@
     "format:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "release": "pnpm build && changeset publish",
     "test": "pnpm -r test"
   },
   "devDependencies": {
