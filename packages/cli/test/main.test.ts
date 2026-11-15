@@ -1,12 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
 import { renderUsage, runCommand } from "citty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import pkg from "../package.json" with { type: "json" };
 import type { Change, Connector, PullOptions } from "../src/contract.ts";
-import { createMain, main } from "../src/main.ts";
+import { createMain, main, terminalAsk } from "../src/main.ts";
 import { ConnectorError } from "../src/registry.ts";
 import { baseSetup, FIXTURES, tempDir, writeSetup } from "./helpers.ts";
 
@@ -118,6 +119,27 @@ describe("10xagents", () => {
     expect(err).toEqual([
       `${join(dir, ".10xagents")}: bench reads a setup folder on this machine, and there's none here`,
     ]);
+  });
+});
+
+describe("terminalAsk", () => {
+  it("asks on standard error, so standard output carries only the command's output", async () => {
+    const asked: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      asked.push(String(chunk));
+      return true;
+    });
+    const input = Object.assign(new PassThrough(), { isTTY: true });
+    const ask = terminalAsk(input);
+    const answer = ask?.("  1. p1\n  2. p2\nProfile (number): ");
+    input.write(" 2 \n");
+    expect(await answer).toBe("2");
+    expect(asked.join("")).toContain("  1. p1\n  2. p2\nProfile (number): ");
+    expect(out).toEqual([]);
+  });
+
+  it("is missing when the input isn't a terminal", () => {
+    expect(terminalAsk(new PassThrough())).toBeUndefined();
   });
 });
 

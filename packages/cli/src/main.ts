@@ -39,11 +39,16 @@ export interface CliContext {
   now: () => number;
 }
 
-/** Asks on the terminal, when standard input is one. */
-const terminalAsk = (): ((question: string) => Promise<string>) | undefined => {
-  if (!process.stdin.isTTY) return undefined;
+/**
+ * Asks on the terminal, when `input` is one. The question goes to standard error, so standard
+ * output carries only the command's output, like the report of `bench --format json`.
+ */
+export const terminalAsk = (
+  input: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin,
+): ((question: string) => Promise<string>) | undefined => {
+  if (!input.isTTY) return undefined;
   return async (question) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const rl = createInterface({ input, output: process.stderr });
     try {
       return (await rl.question(question)).trim();
     } finally {

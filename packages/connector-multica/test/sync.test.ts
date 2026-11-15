@@ -181,7 +181,7 @@ describe("profiles", () => {
     const place = connector.place?.(live);
     expect(place).toEqual({ name: "Team", pull: { profile: "p2", workspace: "ws-1" } });
     await connector.pull(rendered.target, { ...place?.pull, ask });
-    expect(questions).toEqual(["Profile (number): "]);
+    expect(questions).toEqual(["  1. p1\n  2. p2\nProfile (number): "]);
     expect(new Set(multica.calls().map((call) => call.profile))).toEqual(new Set(["p2"]));
   });
 

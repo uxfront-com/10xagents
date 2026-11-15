@@ -469,6 +469,25 @@ describe("bench: reading Multica", () => {
     ).toEqual([]);
   });
 
+  it("asks for the profile with the list in the question, and logs no part of it", async () => {
+    const multica = fake(benchState(), ["p1", "p2"]);
+    const connector = createConnector({ env: multica.env, desktop: "/nowhere/multica" });
+    const questions: string[] = [];
+    const logged: string[] = [];
+    const { profile: _, ...noProfile } = query();
+    await connector.bench?.({
+      ...noProfile,
+      ask: (question) => {
+        questions.push(question);
+        return Promise.resolve("1");
+      },
+      log: (line) => logged.push(line),
+    });
+    expect(questions).toEqual(["  1. p1\n  2. p2\nProfile (number): "]);
+    expect(logged.filter((line) => /^\s*\d+\. /.test(line))).toEqual([]);
+    expect(new Set(multica.calls().map((call) => call.profile))).toEqual(new Set(["p1"]));
+  });
+
   it("stops when several profiles are logged in and none is named", async () => {
     const multica = fake(benchState(), ["p1", "p2"]);
     const connector = createConnector({ env: multica.env, desktop: "/nowhere/multica" });

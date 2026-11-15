@@ -30,13 +30,13 @@ export const listProfiles = (home: string): string[] => {
 
 /**
  * The profile to use: the one given, the only one there is, or the one the person picks. Throws
- * when there are several and no terminal to ask in.
+ * when there are several and no terminal to ask in. The question holds the numbered list, so the
+ * list reaches the person wherever the question does, and never the command's output.
  */
 export const pickProfile = async (
   home: string,
   given: string | undefined,
   ask: ((question: string) => Promise<string>) | undefined,
-  log: (line: string) => void,
 ): Promise<string> => {
   if (given !== undefined) return given;
   const found = listProfiles(home);
@@ -50,8 +50,8 @@ export const pickProfile = async (
     const names = found.map((name) => name || '"" for the default').join(", ");
     throw new Error(`several Multica profiles: pass --profile <name> (${names})`);
   }
-  found.forEach((name, index) => log(`  ${index + 1}. ${name || "(default)"}`));
-  const answer = await ask("Profile (number): ");
+  const list = found.map((name, index) => `  ${index + 1}. ${name || "(default)"}\n`).join("");
+  const answer = await ask(`${list}Profile (number): `);
   const picked = found[Number(answer) - 1];
   if (picked === undefined) throw new Error(`no profile ${answer}`);
   return picked;
