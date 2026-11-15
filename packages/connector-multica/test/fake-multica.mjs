@@ -78,8 +78,22 @@ const unzip = (buffer) => {
   return files;
 };
 
-const BUILT_IN = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
+const BUILT_IN_NAMES = {
+  backlog: "Backlog",
+  todo: "Todo",
+  in_progress: "In Progress",
+  in_review: "In Review",
+  blocked: "Blocked",
+  done: "Done",
+  cancelled: "Cancelled",
+};
+const BUILT_IN = Object.keys(BUILT_IN_NAMES);
 const statusKeys = () => [...BUILT_IN, ...(state.statuses ?? []).map((status) => status.key)];
+/** The catalog `issue-status list` returns: the built-in statuses, then the custom ones. */
+const catalog = () => [
+  ...BUILT_IN.map((key) => ({ key, name: BUILT_IN_NAMES[key], is_system: true })),
+  ...(state.statuses ?? []).map((status) => ({ ...status, is_system: false })),
+];
 
 const [a, b, c] = args;
 const agent = (id) => state.agents.find((item) => item.id === id) ?? fail(`no agent ${id}`);
@@ -218,6 +232,25 @@ if (a === "workflow" && b === "update") {
   });
   workflow.steps = written;
   out({ id: workflow.id, steps: written });
+}
+if (a === "issue-status" && b === "list") {
+  scoped();
+  out(catalog().map((status) => ({ archived_at: null, ...status })));
+}
+if (a === "issue-status" && b === "update") {
+  scoped();
+  // As Multica does: a built-in status can't change, and names are unique, case-insensitive.
+  if (BUILT_IN.includes(c)) fail("Error: built-in statuses cannot be modified");
+  const status = (state.statuses ?? []).find((item) => item.key === c) ?? fail(`no status ${c}`);
+  const name = flag("--name");
+  if (name !== undefined) {
+    const clash = catalog().find(
+      (item) => item.key !== c && item.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (clash) fail("Error: returned 409: a status with this name already exists");
+    status.name = name;
+  }
+  out(status);
 }
 // What `bench` reads: issues, their runs, timelines and comments, and attachments.
 if (a === "issue" && b === "list") {

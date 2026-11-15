@@ -2,8 +2,10 @@
 //
 // Multica attaches workflows to projects, and an issue has no workflow of its own, so every
 // workflow of a target goes into one. The first keeps its column names. Every later one's
-// custom columns are named `<Workflow> <Column>`, so the server derives `<workflow>_<key>`
-// (`Part Planning` → `part_planning`). Built-in columns, like Todo and Done, are shared.
+// custom columns are named `<prefix> <Column>`, where the prefix is the workflow's `prefix`, or
+// its id in title case (`Part Planning`). A new workspace derives each status's key from its
+// first name (`part_planning`), and a renamed status keeps its key. Built-in columns, like Todo
+// and Done, are shared.
 
 import type {
   ColumnNames,
@@ -37,6 +39,8 @@ const REQUIRED = ["todo", "done", "cancelled"];
 /** These take no handoff. */
 const NO_HANDOFF = new Set(["backlog", "done", "cancelled"]);
 
+/** The most characters Multica takes in a status's name. */
+export const MAX_NAME = 64;
 /** The most characters Multica takes in a step's instructions. */
 export const MAX_STEP = 8000;
 /** The most characters Multica takes in an agent's description. */
@@ -55,7 +59,8 @@ export const titleCase = (key: string): string =>
 /**
  * The Multica name of each column: a built-in column's own, the first workflow's custom columns
  * by their `name` (or their key, in title case), and every later workflow's prefixed with the
- * workflow's id, in title case.
+ * workflow's `prefix`, or its id in title case. The first workflow's `prefix` is ignored, so a
+ * workflow can come first in one target and later in another.
  */
 export const columnNames = (workflows: readonly Workflow[]): ColumnNames =>
   Object.fromEntries(
@@ -66,7 +71,8 @@ export const columnNames = (workflows: readonly Workflow[]): ColumnNames =>
           const builtIn = BUILT_IN[column.key];
           if (builtIn !== undefined) return [column.key, builtIn];
           const own = column.name ?? titleCase(column.key);
-          return [column.key, index === 0 ? own : `${titleCase(workflow.id)} ${own}`];
+          const prefix = workflow.prefix ?? titleCase(workflow.id);
+          return [column.key, index === 0 ? own : `${prefix} ${own}`];
         }),
       ),
     ]),
@@ -231,6 +237,10 @@ export const checkWorkflows = (rendered: RenderedSetup, merged: Merged): Connect
     if (column.key) continue;
     const from = column.from[0];
     const field = from ? `workflows.${from.workflow}.columns.${from.key}.name` : "workflows";
+    const size = length(column.name);
+    if (size > MAX_NAME) {
+      issues.push({ field, message: `is ${size} characters, over Multica's ${MAX_NAME}` });
+    }
     const lower = column.name.toLowerCase();
     const earlier = names.get(lower);
     if (builtInNames.has(lower)) {

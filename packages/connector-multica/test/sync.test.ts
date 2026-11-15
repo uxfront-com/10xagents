@@ -8,13 +8,16 @@ import {
   fake,
   freshState,
   planWith,
+  prefixed,
   render,
   summaries,
   syncWith,
   toApply,
   writeFiles,
   tempDir,
+  twoWorkflows,
 } from "./helpers.ts";
+import type { Fake } from "./helpers.ts";
 
 describe("a first sync", () => {
   it("writes skills, agents, the squad, the workflow and the Agent context, then matches", async () => {
@@ -416,5 +419,128 @@ describe("projects", () => {
     ]);
     expect(multica.writes().some((line) => line.startsWith("project"))).toBe(false);
     expect(multica.state().workflows[0]?.project_ids).toEqual(["p-1"]);
+  });
+});
+
+/** A fake synced with the part workflow's default names, `Part Planning` and the rest. */
+const syncedWithDefaults = async (): Promise<Fake> => {
+  const multica = fake();
+  const { failed } = await syncWith(render(twoWorkflows()), multica.env);
+  expect(failed).toEqual([]);
+  expect(multica.state().statuses).toContainEqual(
+    expect.objectContaining({ key: "part_planning", name: "Part Planning" }),
+  );
+  return multica;
+};
+
+/** The writes `multica` gets after `before` of them. */
+const writesSince = (multica: Fake, before: number): string[] => multica.writes().slice(before);
+
+const stepKeys = (multica: Fake): unknown[] =>
+  (multica.state().workflows[0]?.steps ?? []).map((step) => step.status_key);
+
+describe("renaming a column", () => {
+  it("renames a prefixed column's status in place and keeps its key", async () => {
+    const multica = await syncedWithDefaults();
+    const keys = (multica.state().statuses ?? []).map((status) => status.key);
+    const steps = stepKeys(multica);
+    const before = multica.writes().length;
+    const rendered = render(prefixed());
+
+    const { changes } = await planWith(rendered, multica.env);
+    const workflow = changes.find((change) => change.kind === "workflow" && !change.note);
+    expect(workflow?.summary).toContain("part_planning: Part Planning → In Parts / Planning");
+    const items = workflow?.summary.replace("~ Default workflow: ", "").split(", ") ?? [];
+    expect(items.filter((item) => /^[+-] /.test(item))).toEqual([]);
+    expect(changes.filter((change) => change.manual)).toEqual([]);
+
+    const { failed } = await syncWith(rendered, multica.env);
+    expect(failed).toEqual([]);
+    const writes = writesSince(multica, before);
+    expect(writes).toContain("issue-status update part_planning --name In Parts / Planning");
+    expect(writes.filter((line) => line.startsWith("issue-status create"))).toEqual([]);
+    expect(writes.filter((line) => line.includes("--map"))).toEqual([]);
+    expect(writes.filter((line) => /^issue (status|update)\b/.test(line))).toEqual([]);
+    const statuses = multica.state().statuses ?? [];
+    expect(statuses.map((status) => status.key)).toEqual(keys);
+    expect(statuses.find((status) => status.key === "part_planning")?.name).toBe(
+      "In Parts / Planning",
+    );
+    expect(stepKeys(multica)).toEqual(steps);
+    expect(toApply((await planWith(rendered, multica.env)).changes)).toEqual([]);
+  });
+
+  it("stops with ! when the new name belongs to another status, and writes no status or workflow", async () => {
+    const multica = await syncedWithDefaults();
+    multica.set((state) => {
+      state.statuses?.push({ key: "other", name: "in parts / planning", category: "started" });
+    });
+    const before = multica.writes().length;
+    const rendered = render(prefixed());
+    const { changes } = await syncWith(rendered, multica.env);
+    expect(changes.filter((change) => change.manual).map((change) => change.summary)).toEqual([
+      "! part_planning → In Parts / Planning: Multica already has a status named in parts / planning; rename or archive it first",
+    ]);
+    expect(summaries(changes).filter((line) => line.startsWith("· Agent context"))).toEqual([
+      expect.stringMatching(/: waits for the workflow$/),
+    ]);
+    const writes = writesSince(multica, before);
+    expect(writes.filter((line) => line.startsWith("issue-status update"))).toEqual([]);
+    expect(writes.filter((line) => line.startsWith("workflow update"))).toEqual([]);
+    expect(writes.filter((line) => line.includes("--context-stdin"))).toEqual([]);
+    expect(multica.state().statuses?.find((status) => status.key === "part_planning")?.name).toBe(
+      "Part Planning",
+    );
+  });
+
+  it("holds the Agent context back when a rename fails", async () => {
+    const multica = await syncedWithDefaults();
+    multica.set((state) => {
+      state.fail = { "issue-status update": "Error: the server refused it" };
+    });
+    const context = multica.state().workspace.context;
+    const { failed } = await syncWith(render(prefixed()), multica.env);
+    expect(failed.map(({ change, message }) => [change.kind, message])).toEqual([
+      ["workflow", "multica issue-status update part_planning: Error: the server refused it"],
+      ["context", "held back, since the workflow's write failed"],
+    ]);
+    expect(multica.state().workspace.context).toBe(context);
+    expect(multica.writes().filter((line) => line.startsWith("workflow update")).length).toBe(2);
+  });
+
+  it.each([
+    [
+      "holds the workflow with ! when the CLI has no issue-status command",
+      { "issue-status": 'Error: unknown command "issue-status" for "multica"' },
+      "! this multica CLI can't list statuses, so it can't rename columns in place: update it",
+    ],
+    [
+      "holds the workflow with ! when the server has no status catalog",
+      { "issue-status list": "Error: GET /api/issue-statuses returned 404: not found" },
+      "! this Multica server can't list statuses, so it can't rename columns in place: update it",
+    ],
+  ])("%s", async (_, fail, line) => {
+    const multica = await syncedWithDefaults();
+    const statuses = multica.state().statuses;
+    multica.set((state) => {
+      state.fail = fail;
+      const alpha = state.agents.find((agent) => agent.name === "Alpha");
+      if (alpha) alpha.description = "Changed by hand.";
+    });
+    const before = multica.writes().length;
+    const { changes, failed } = await syncWith(render(prefixed()), multica.env);
+    expect(failed).toEqual([]);
+    expect(changes.filter((change) => change.manual).map((change) => change.summary)).toEqual([
+      line,
+    ]);
+    const writes = writesSince(multica, before);
+    expect(writes.filter((w) => w.startsWith("workflow update"))).toEqual([]);
+    expect(writes.filter((w) => w.startsWith("issue-status update"))).toEqual([]);
+    expect(writes.filter((w) => w.includes("--context-stdin"))).toEqual([]);
+    expect(multica.state().statuses).toEqual(statuses);
+    // What a ! doesn't hold still goes in.
+    expect(multica.state().agents.find((agent) => agent.name === "Alpha")?.description).toBe(
+      "Alpha does the work.",
+    );
   });
 });

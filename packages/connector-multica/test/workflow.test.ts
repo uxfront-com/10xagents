@@ -2,35 +2,17 @@ import type { RenderedSetup } from "10xagents";
 import { describe, expect, it } from "vitest";
 
 import { columnNames } from "../src/index.ts";
-import { baseFiles, fake, issuesOf, planWith, render, syncWith, toApply } from "./helpers.ts";
-import type { Files } from "./helpers.ts";
-
-/** The base setup plus a second workflow, `part`, on the same target. */
-const twoWorkflows = (
-  blocked = "{ key: blocked, handoff: owner }",
-  blockedStep?: string,
-): Files => ({
-  ...baseFiles(),
-  "workflows/part/workflow.yaml": [
-    "id: part",
-    "entry: planning",
-    "columns:",
-    '  - { key: planning, name: Planning, handoff: "agent:beta", next: in_progress, back: blocked }',
-    "  - { key: in_progress, handoff: none }",
-    `  - ${blocked}`,
-    "  - { key: done, handoff: none }",
-    "  - { key: cancelled, handoff: none }",
-    "",
-  ].join("\n"),
-  "workflows/part/steps/planning.md":
-    "Plan the part, then send it on from {{workflows.part.columns.planning}}.\n",
-  ...(blockedStep === undefined ? {} : { "workflows/part/steps/blocked.md": blockedStep }),
-  "targets/t/target.yaml":
-    baseFiles()["targets/t/target.yaml"]?.replace(
-      "workflows: [request]",
-      "workflows: [request, part]",
-    ) ?? null,
-});
+import {
+  baseFiles,
+  fake,
+  issuesOf,
+  planWith,
+  render,
+  syncWith,
+  toApply,
+  prefixed,
+  twoWorkflows,
+} from "./helpers.ts";
 
 describe("columnNames", () => {
   it("keeps the first workflow's names, prefixes later ones' custom columns and uses Multica's built-in names", () => {
@@ -57,6 +39,68 @@ describe("columnNames", () => {
       request: { todo: "Todo", plan_review: "Plan Review", planning: "Planning" },
       part: { planning: "Part Planning", in_progress: "In Progress" },
     });
+  });
+});
+
+/** The issues for the two workflows, with `prefix` and one more column on `part`. */
+const withPart = (prefix: string, column: string): string[] => {
+  const files = twoWorkflows();
+  files["workflows/part/workflow.yaml"] =
+    files["workflows/part/workflow.yaml"]
+      ?.replace("entry: planning", `entry: planning\nprefix: ${prefix}`)
+      .replace("  - { key: in_progress", `  - ${column}\n  - { key: in_progress`) ?? null;
+  return issuesOf(render(files));
+};
+
+describe("a workflow's prefix", () => {
+  it("uses a later workflow's prefix for its custom columns, and ignores the first workflow's", () => {
+    const names = columnNames([
+      {
+        id: "request",
+        entry: "todo",
+        prefix: "Ignored /",
+        columns: [
+          { key: "todo", handoff: "none" },
+          { key: "planning", name: "Planning", handoff: "none" },
+        ],
+      },
+      {
+        id: "part",
+        entry: "planning",
+        prefix: "In Parts /",
+        columns: [
+          { key: "planning", name: "Planning", handoff: "none" },
+          { key: "plan_review", handoff: "none" },
+          { key: "in_progress", handoff: "none" },
+        ],
+      },
+    ]);
+    expect(names).toEqual({
+      request: { todo: "Todo", planning: "Planning" },
+      part: {
+        planning: "In Parts / Planning",
+        plan_review: "In Parts / Plan Review",
+        in_progress: "In Progress",
+      },
+    });
+  });
+
+  it("renders a prefixed column name in steps and the Agent context", () => {
+    const rendered = render(prefixed());
+    expect(issuesOf(rendered)).toEqual([]);
+    expect(rendered.workflows[1]?.columns[0]?.instructions).toBe(
+      "Plan the part, then send it on from In Parts / Planning.",
+    );
+    expect(rendered.sharedContext).toContain("Parts start in In Parts / Planning.");
+  });
+
+  it("refuses a prefixed name that is a built-in name or another column's, case-insensitive", () => {
+    expect(withPart("In", "{ key: progress, handoff: none }")).toEqual([
+      "workflows.part.columns.progress.name: In Progress is the name of a built-in Multica status",
+    ]);
+    expect(withPart("plan", "{ key: approval, handoff: none }")).toEqual([
+      "workflows.part.columns.approval.name: plan Approval is also the name of workflow request's plan_approval: Multica names a status once",
+    ]);
   });
 });
 
@@ -126,6 +170,15 @@ const withStep = (size: number): string[] =>
     changed((rendered) => {
       const column = rendered.workflows[0]?.columns[1];
       if (column) column.instructions = "x".repeat(size);
+    }),
+  );
+
+/** The issues for the request workflow's planning column named with `size` characters. */
+const withName = (size: number): string[] =>
+  issuesOf(
+    changed((rendered) => {
+      const column = rendered.workflows[0]?.columns[2];
+      if (column) column.name = "é".repeat(size);
     }),
   );
 
@@ -230,6 +283,13 @@ describe("validate", () => {
     );
     expect(twice).toEqual([
       "workflows.request.columns.plan_approval.name: planning is also the name of workflow request's planning: Multica names a status once",
+    ]);
+  });
+
+  it("refuses a column name over Multica's 64 characters", () => {
+    expect(withName(64)).toEqual([]);
+    expect(withName(65)).toEqual([
+      "workflows.request.columns.planning.name: is 65 characters, over Multica's 64",
     ]);
   });
 });

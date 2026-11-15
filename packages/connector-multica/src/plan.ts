@@ -19,8 +19,14 @@ export type Operation =
   | { op: "squad-member-add"; squad: string; agent: string; role: string }
   | { op: "squad-member-role"; squad: string; agent: string; role: string }
   | { op: "squad-leader"; squad: string; agent: string }
-  | { op: "workflow"; workflow: string; specs: StepSpec[] }
+  | { op: "workflow"; workflow: string; specs: StepSpec[]; renames: Rename[] }
   | { op: "context"; context: string };
+
+/** A status `apply` renames in place, by key, before it writes the workflow. */
+export interface Rename {
+  key: string;
+  name: string;
+}
 
 export type ChangeData = Operation & { cli: MulticaLive["cli"]; workspace: string };
 
@@ -338,7 +344,33 @@ const planWorkflow = (
   const want = stepsFor(specs, keys);
   const wanted = specs.map((_, place) => keyAt(specs, keys, place));
 
+  // A column whose name changed keeps its status: Multica renames it in place, so its key and
+  // its issues stay. Renames are seen only when every custom column's key is known.
+  const renames: Rename[] = [];
   const notes: string[] = [];
+  const custom = specs.filter((spec) => !spec.key).length;
+  if (custom > 0 && keys.size === custom) {
+    for (const [place, key] of keys) {
+      const spec = specs[place];
+      const status = workflow.statuses.find((candidate) => candidate.key === key);
+      if (!spec || !status || status.name === spec.name) continue;
+      const lower = spec.name.toLowerCase();
+      const taken = workflow.statuses.find(
+        (candidate) => candidate.key !== key && candidate.name.toLowerCase() === lower,
+      );
+      if (taken) {
+        manual(
+          "workflow",
+          "default",
+          `${key} → ${spec.name}: Multica already has a status named ${taken.name}; rename or archive it first`,
+        );
+        return true;
+      }
+      renames.push({ key, name: spec.name });
+      notes.push(`${key}: ${status.name} → ${spec.name}`);
+    }
+  }
+
   let diffs = "";
   specs.forEach((spec, place) => {
     const key = wanted[place];
@@ -380,6 +412,7 @@ const planWorkflow = (
         op: "workflow",
         workflow: workflow.id,
         specs,
+        renames,
       },
       diffs,
     );

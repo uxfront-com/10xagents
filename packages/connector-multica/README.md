@@ -70,6 +70,8 @@ A few things it leaves to you, and says so with a `!` line:
 - **Agents and squads.** It never creates one, so create each agent and the squad with the names the setup gives, then run `sync` again.
 - **Disabled skills.** A run loads only enabled skills, so a skill that's attached but switched off has to be switched on in the agent's Skills tab.
 - **The owner.** `handoff: owner` goes to the workspace member whose full name is `vars.owner`, or whose first name is, when only one member matches. A name that matches nobody, or several people, stops the workflow's sync until you fix it.
+- **An older CLI or server.** The connector reads the workspace's statuses to see when a column's name changed. A `multica` CLI or a server that can't list them stops the workflow's sync until you update it, since writing the workflow without the names could make new statuses and leave issues on the old ones.
+- **A name another status has.** When a column's new name belongs to another status in the workspace, rename or archive that status first.
 
 It also never removes a skill from an agent, since one you attached by hand stays, and never moves a project to another workflow: a project on another one shows as a `·` line with the command that switches it back. The Agent context describes the workflow, so while the workflow can't sync, the context waits too.
 
@@ -81,9 +83,11 @@ Multica gives each workspace one Default workflow, so the connector merges a tar
 
 - **Built-in columns are shared.** Backlog, Todo, In Progress, In Review, Blocked, Done and Cancelled keep Multica's names, and every workflow that has one uses the same column. Two workflows have to agree on its handoff, step and moves.
 - **The first workflow keeps its column names.** A custom column takes its `name`, or its key in title case, so `plan_review` becomes Plan Review.
-- **Every later workflow's columns are prefixed** with its id in title case, so `part`'s `planning` becomes Part Planning.
+- **Every later workflow's columns are prefixed** with its id in title case, so `part`'s `planning` becomes Part Planning. Give the workflow a `prefix` to use other text: with `prefix: In Parts /`, it becomes In Parts / Planning. The first workflow keeps its names whether or not it sets a `prefix`, so the same workflow can come first in one target and later in another.
 
-Multica makes a custom status's key from its first name and keeps it when you rename the status, so Part Planning gets the key `part_planning`. `{{workflows.<id>.columns.<key>}}` renders these names, so the texts name the columns as the workspace shows them.
+Multica makes a custom status's key from its first name, so on a new workspace, Part Planning gets the key `part_planning` and In Parts / Planning gets `in_parts_planning`. A renamed status keeps its key. `{{workflows.<id>.columns.<key>}}` renders the names, so it's best to name columns that way in the texts rather than write a key.
+
+When a column's name or its workflow's `prefix` changes, `sync` renames the status in place, so it keeps its key and its issues. It can only tell which status is which while the number of custom columns stays the same, so change names in one sync and add or remove columns in another.
 
 `build`, `plan` and `sync` stop on what Multica would refuse or put back another way:
 
@@ -92,6 +96,7 @@ Multica makes a custom status's key from its first name and keeps it when you re
 - Some workflow has a `todo`, a `done` and a `cancelled` column.
 - A step's text is at most 8000 characters, and an agent's description at most 255.
 - No custom column takes a built-in status's name, or another column's.
+- A custom column's name is at most 64 characters.
 
 ## Benchmarking
 

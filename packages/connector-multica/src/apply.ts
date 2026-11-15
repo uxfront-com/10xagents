@@ -156,8 +156,9 @@ const applyOne = (data: ChangeData, file: (name: string, content: string | Buffe
 };
 
 /**
- * Writes the workflow in two passes. The first names every custom column, so Multica creates or
- * reuses its status, and sets only the moves whose target has a key. The second sets the moves
+ * Renames the statuses whose column names changed, in place, so they keep their keys and issues.
+ * Then writes the workflow in two passes. The first names every custom column, so Multica creates
+ * or reuses its status, and sets only the moves whose target has a key. The second sets the moves
  * to custom columns, with the keys the first one made.
  */
 const writeWorkflow = (
@@ -166,6 +167,9 @@ const writeWorkflow = (
   data: Extract<ChangeData, { op: "workflow" }>,
   file: (name: string, content: string) => string,
 ) => {
+  for (const { key, name } of data.renames) {
+    run(cli, ["issue-status", "update", key, "--name", name], workspace);
+  }
   const steps = (keys: ReadonlyMap<number, string>) =>
     file("steps.json", JSON.stringify(stepsFor(data.specs, keys), null, 2));
   const first = stepsFor(data.specs, new Map());

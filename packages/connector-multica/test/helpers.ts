@@ -100,6 +100,45 @@ export const baseFiles = (): Files => ({
   ].join("\n"),
 });
 
+/** The base setup plus a second workflow, `part`, on the same target. */
+export const twoWorkflows = (
+  blocked = "{ key: blocked, handoff: owner }",
+  blockedStep?: string,
+): Files => ({
+  ...baseFiles(),
+  "workflows/part/workflow.yaml": [
+    "id: part",
+    "entry: planning",
+    "columns:",
+    '  - { key: planning, name: Planning, handoff: "agent:beta", next: in_progress, back: blocked }',
+    "  - { key: in_progress, handoff: none }",
+    `  - ${blocked}`,
+    "  - { key: done, handoff: none }",
+    "  - { key: cancelled, handoff: none }",
+    "",
+  ].join("\n"),
+  "workflows/part/steps/planning.md":
+    "Plan the part, then send it on from {{workflows.part.columns.planning}}.\n",
+  ...(blockedStep === undefined ? {} : { "workflows/part/steps/blocked.md": blockedStep }),
+  "targets/t/target.yaml":
+    baseFiles()["targets/t/target.yaml"]?.replace(
+      "workflows: [request]",
+      "workflows: [request, part]",
+    ) ?? null,
+});
+
+/** `twoWorkflows`, with `prefix: In Parts /` on `part`, and a global trait that names its column. */
+export const prefixed = (): Files => {
+  const files = twoWorkflows();
+  files["workflows/part/workflow.yaml"] =
+    files["workflows/part/workflow.yaml"]?.replace(
+      "entry: planning",
+      "entry: planning\nprefix: In Parts /",
+    ) ?? null;
+  files["traits/global/02-parts.md"] = "Parts start in {{workflows.part.columns.planning}}.\n";
+  return files;
+};
+
 /** Writes `files` to a fresh directory and renders target `t` for Multica. Throws on errors. */
 export const render = (files: Files = baseFiles(), slug = "t"): RenderedSetup => {
   const dir = writeFiles(tempDir(), files);
@@ -174,7 +213,7 @@ export interface FakeState {
     project_ids: string[];
   }[];
   projects: { id: string; title: string }[];
-  statuses?: { key: string; name: string; category: string }[];
+  statuses?: { key: string; name: string; category: string; archived_at?: string | null }[];
   fail?: Record<string, string>;
   noWorkflowCommand?: boolean;
   /** What `bench` reads, by issue id where it's per issue. */
@@ -230,7 +269,7 @@ export interface Fake {
 }
 
 const READS =
-  /^(workspace (list|get|member list)|skill (list|get)|agent (list|get)|squad (list|get|member list)|workflow (list|get)|project list)\b/;
+  /^(workspace (list|get|member list)|skill (list|get)|agent (list|get)|squad (list|get|member list)|workflow (list|get)|issue-status (list|get)|project list)\b/;
 
 /** A fake Multica with `state`, a home with the profiles named, and an environment that leaks. */
 export const fake = (state: FakeState = freshState(), profiles: string[] = ["p1"]): Fake => {

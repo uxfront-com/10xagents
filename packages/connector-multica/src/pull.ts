@@ -52,10 +52,16 @@ export interface LiveStep {
   back_status_key?: string;
 }
 
-/** The Default workflow, or why it can't be synced. */
+/** An active status in the workspace's catalog. */
+export interface LiveStatus {
+  key: string;
+  name: string;
+}
+
+/** The Default workflow, with the workspace's active statuses, or why it can't be synced. */
 export type LiveWorkflow =
   | { problem: string }
-  | { id: string; steps: LiveStep[]; project_ids: string[] };
+  | { id: string; steps: LiveStep[]; project_ids: string[]; statuses: LiveStatus[] };
 
 /** The Multica connector's live state. */
 export type MulticaLive = {
@@ -210,19 +216,27 @@ export const pull = async (
   };
 };
 
+/** What an older CLI or server says when it lacks a command: `cli`, `server` or neither. */
+const missing = (error: unknown): "cli" | "server" | undefined => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/unknown command|unknown flag/i.test(message)) return "cli";
+  if (/returned 404/.test(message)) return "server";
+  return undefined;
+};
+
 const pullWorkflow = (json: (args: string[]) => unknown): LiveWorkflow => {
   let listed: Row[];
   try {
     listed = rows(json(["workflow", "list"]), "workflow list");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/unknown command|unknown flag/i.test(message)) {
+    const lacks = missing(error);
+    if (lacks === "cli") {
       return {
         problem:
           "this multica CLI has no `workflow` command: update it, or build the workflow by hand",
       };
     }
-    if (/returned 404/.test(message)) {
+    if (lacks === "server") {
       return {
         problem: "this Multica server has no workflows: update it, or build the workflow by hand",
       };
@@ -232,10 +246,34 @@ const pullWorkflow = (json: (args: string[]) => unknown): LiveWorkflow => {
   const found = listed.find((workflow) => workflow.is_default === true);
   if (!found) return { problem: "Multica listed no Default workflow" };
   const full = row(json(["workflow", "get", text(found.id)]), "workflow get");
+  // Without the names, `plan` can't see a rename, and writing the workflow by name would make
+  // new statuses and leave issues on the old ones. So the workflow waits.
+  let statuses: LiveStatus[];
+  try {
+    statuses = rows(json(["issue-status", "list"]), "issue-status list")
+      .filter((status) => !status.archived_at)
+      .map((status) => ({ key: text(status.key), name: text(status.name) }));
+  } catch (error) {
+    const lacks = missing(error);
+    if (lacks === "cli") {
+      return {
+        problem:
+          "this multica CLI can't list statuses, so it can't rename columns in place: update it",
+      };
+    }
+    if (lacks === "server") {
+      return {
+        problem:
+          "this Multica server can't list statuses, so it can't rename columns in place: update it",
+      };
+    }
+    throw error;
+  }
   return {
     id: text(found.id),
     steps: rows(full.steps ?? [], "workflow get").map(toStep),
     project_ids: Array.isArray(full.project_ids) ? full.project_ids.map(text) : [],
+    statuses,
   };
 };
 
