@@ -2,13 +2,14 @@
 
 10xagents lets you describe a team of AI agents once, in YAML and Markdown, and keep the platform they run on in line with it. Think of prompts edited by hand in a web app until nobody knows which copy is current, two workspaces whose instructions differ in one paragraph nobody remembers writing, or a change to a prompt you can't tell paid off.
 
-A setup holds the agents, the templates their prompts render from, the traits they share and the workflows that move work between them. The `10xagents` CLI checks a setup and renders every prompt, and a connector syncs it to a platform and measures how the team does there. [Multica](https://multica.ai) is the first connector, and Ultracode, a squad of seven agents, comes bundled as the example setup.
+A setup holds the agents, the templates their prompts render from, the traits they share and the workflows that move work between them. The `10xagents` CLI checks a setup and renders every prompt, and a connector syncs it to a platform and measures how the team does there. [Multica](https://multica.ai) is the first connector, and a starter setup of three agents comes bundled to start from.
 
 | Package                                                      | What it is                                                                                                                |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
 | [`10xagents`](packages/cli)                                  | The CLI (bin `10xagents`), the schemas, the renderer, the built-in `default` template, the connector contract and `bench` |
 | [`@10xagents/connector-multica`](packages/connector-multica) | The Multica connector: `plan`, `sync` and `bench` against a Multica workspace                                             |
-| [`setups/ultracode`](setups/ultracode)                       | Ultracode, bundled inside `10xagents` as the setup named `ultracode`                                                      |
+| [`setups/starter`](setups/starter)                           | The starter, bundled inside `10xagents` as the setup named `starter`                                                      |
+| [`ultracode`](ultracode)                                     | Ultracode, a squad of seven agents. Private: it doesn't ship in the package                                               |
 
 ## Install
 
@@ -28,11 +29,11 @@ The connector has to be installed beside the CLI, since `10xagents` finds connec
 
 ## Usage
 
-Start a setup that extends Ultracode, check it and look at what it renders:
+Start a setup that extends the starter, check it and look at what it renders:
 
 ```bash
 npx 10xagents init        # writes .10xagents/ with a config, a starter target and a lock
-npx 10xagents validate    # Valid: 7 agents, 2 workflows, 2 targets.
+npx 10xagents validate    # Valid: 3 agents, 1 workflows, 2 targets.
 npx 10xagents build       # renders the starter target into dist/
 ```
 
@@ -224,11 +225,11 @@ A reference that doesn't resolve is an error, and `validate` reports every one a
 
 ## Sources and layering
 
-A setup can build on others: Ultracode as it ships, a team's shared setup on GitHub, or a folder beside it. List them under `extends` in `10xagents.config.ts`:
+A setup can build on others: the starter as it ships, a team's shared setup on GitHub, or a folder beside it. List them under `extends` in `10xagents.config.ts`:
 
 ```ts
 export default {
-  extends: ["ultracode", "github:my-org/agents/setups/shared#main"],
+  extends: ["starter", "github:my-org/agents/setups/shared#main"],
   target: "example",
 };
 ```
@@ -238,7 +239,7 @@ The config is a plain object, so it loads with nothing installed. The CLI reads 
 | Source  | Written as                                 | Resolves to                                                          |
 | ------- | ------------------------------------------ | -------------------------------------------------------------------- |
 | Local   | `./shared`, `../agents` or `/abs/path`     | A folder, from the folder of the config that lists it                |
-| Bundled | `ultracode`                                | A setup that ships inside `10xagents`                                |
+| Bundled | `starter`                                  | A setup that ships inside `10xagents`                                |
 | GitHub  | `github:<owner>/<repo>[/<subdir>][#<ref>]` | A folder of a repository at a branch, tag or commit. `gh:` works too |
 
 `--dir` takes the same sources, and there a relative path needs no `./`. A bare name is the folder of that name when one exists, and the bundled setup otherwise.
@@ -450,7 +451,15 @@ A connector or collector that reports an id the catalogue doesn't know gets a no
 
 ## Ultracode
 
-Ultracode is a squad of seven agents that takes a request from triage to review on Multica: a Dispatcher, a Planner, a Designer, a Builder, QA, a Writer and Ops. Its [README](setups/ultracode/README.md) covers the seats, how the work moves and how to measure it.
+Ultracode is a squad of seven agents that takes a request from triage to review on Multica: a Dispatcher, a Planner, a Designer, a Builder, QA, a Writer and Ops. Its [README](ultracode/README.md) covers the seats, how the work moves and how to measure it.
+
+Ultracode lives in `ultracode/`, outside `setups/`, so the `10xagents` package doesn't ship it. A setup that has access to this repository extends it from GitHub, with `GITHUB_TOKEN` set to a token that can read it:
+
+```ts
+export default {
+  extends: ["github:uxfront-com/10xagents/ultracode#main"],
+};
+```
 
 ## Developing
 

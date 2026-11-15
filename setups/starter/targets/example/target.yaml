@@ -1,0 +1,10 @@
+# A starting point: copy it and set `vars.owner` to the workspace member who owns the work.
+id: example
+connector: multica
+workflows: [request]
+agents: [lead, builder, reviewer]
+vars:
+  owner: Owner
+squad:
+  name: Starter
+  leader: lead
