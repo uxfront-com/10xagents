@@ -157,7 +157,7 @@ export interface ReadContext {
 export const openSource = async (query: BenchQuery, context: ReadContext): Promise<BenchSource> => {
   const log = query.log ?? (() => {});
   const bin = findMultica(context.env, context.desktop);
-  const profile = await pickProfile(homeOf(context.env), query.profile, query.ask, log);
+  const profile = await pickProfile(homeOf(context.env), query.profile, query.ask);
   const cli: MulticaCli = {
     bin,
     profileArgs: profile ? ["--profile", profile] : [],
