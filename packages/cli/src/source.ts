@@ -35,7 +35,7 @@ const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const REPO = /^[A-Za-z0-9._-]{1,100}$/;
 const SEGMENT = /^[A-Za-z0-9._@+-]+$/;
 const REF = /^[A-Za-z0-9._/@+-]+$/;
-/** A bundled setup's name: an id, like `ultracode`. */
+/** A bundled setup's name: an id, like `starter`. */
 export const BUNDLED_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 export const SHA = /^[0-9a-f]{40}$/;
 
@@ -92,7 +92,7 @@ export const parseSource = (spec: string, base: string): Source => {
 
 /**
  * Parses `--dir` and `--from`. Unlike `extends`, a relative path needs no `./`, so
- * `--dir setups/ultracode` works. A bare name is a local folder when one exists in `cwd`, and a
+ * `--dir setups/starter` works. A bare name is a local folder when one exists in `cwd`, and a
  * bundled setup otherwise.
  */
 export const parseDirSource = (spec: string, cwd: string): Source => {
@@ -102,7 +102,7 @@ export const parseDirSource = (spec: string, cwd: string): Source => {
   return { kind: "local", path };
 };
 
-/** The repository folder of a GitHub source as a path, like `setups/ultracode`. */
+/** The repository folder of a GitHub source as a path, like `setups/starter`. */
 const joinSubdir = (subdir: string, relative: string): string | undefined => {
   const joined = posix.normalize(posix.join(subdir || ".", relative));
   if (joined === ".." || joined.startsWith("../") || posix.isAbsolute(joined)) return undefined;

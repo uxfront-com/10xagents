@@ -1,0 +1,13 @@
+# A request's way from triage to review. Built-in columns take Multica's names, and a custom
+# column without `name` takes its key in title case.
+id: request
+entry: todo
+columns:
+  - { key: backlog, handoff: none }
+  - { key: todo, handoff: agent:lead, next: in_progress }
+  - { key: in_progress, handoff: none, builders: [builder] }
+  - { key: review, category: started, handoff: agent:reviewer, next: in_review, back: in_progress }
+  - { key: in_review, handoff: owner, next: done }
+  - { key: blocked, handoff: owner }
+  - { key: done, handoff: none }
+  - { key: cancelled, handoff: none }

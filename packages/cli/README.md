@@ -2,7 +2,7 @@
 
 The `10xagents` CLI keeps a team of AI agents in one place you can review: a setup of agents, templates, traits and workflows in YAML and Markdown. It checks the setup, renders every prompt, syncs it to a platform through a connector and measures how the team does there.
 
-It ships Ultracode, a squad of seven agents, as the bundled setup `ultracode`, so `10xagents init` gives you a working team to start from. The [repository's README](https://github.com/uxfront-com/10xagents#readme) explains the model: setups, layering, templates, the connector contract and the metric catalogue.
+It ships the bundled setup `starter`, a lead, a builder and a reviewer on one workflow, so `10xagents init` gives you a working team to start from. The [repository's README](https://github.com/uxfront-com/10xagents#readme) explains the model: setups, layering, templates, the connector contract and the metric catalogue.
 
 ## Install
 
@@ -21,7 +21,7 @@ pnpm dlx --package 10xagents --package @10xagents/connector-multica 10xagents --
 ## Usage
 
 ```bash
-npx 10xagents init        # a setup in .10xagents/ that extends Ultracode
+npx 10xagents init        # a setup in .10xagents/ that extends the starter
 npx 10xagents validate    # checks it
 npx 10xagents build       # renders the prompts into dist/
 npx 10xagents plan        # compares it with the live workspace
@@ -31,7 +31,7 @@ npx 10xagents bench       # measures the last 30 days
 
 ## Commands
 
-Every command reads the setup in `.10xagents` unless you pass `--dir`, which takes a folder, a bundled setup's name like `ultracode`, or `github:<owner>/<repo>[/<subdir>][#<ref>]`. A command that works on one target takes `--target`, then the config's `target`, then the setup's only target, and otherwise stops and lists the targets to choose from.
+Every command reads the setup in `.10xagents` unless you pass `--dir`, which takes a folder, a bundled setup's name like `starter`, or `github:<owner>/<repo>[/<subdir>][#<ref>]`. A command that works on one target takes `--target`, then the config's `target`, then the setup's only target, and otherwise stops and lists the targets to choose from.
 
 When something's wrong, a command prints one line per error, as `<file>: <field>: <message>`, then the count, and exits 1. A file fetched from GitHub shows as its source at its commit, rather than a path into the cache.
 
@@ -51,13 +51,13 @@ When something's wrong, a command prints one line per error, as `<file>: <field>
 `init` writes `10xagents.config.ts`, a starter target and `10xagents.lock` into a new local folder. The config extends `--from` and is a plain object with no import, so it loads where `10xagents` isn't installed. The starter target copies the first target of the setup it extends, under the new slug, without that target's overrides and files.
 
 ```bash
-npx 10xagents init --from ultracode --target my-team
+npx 10xagents init --from starter --target my-team
 ```
 
 | Flag       | Default         | What it sets                                                              |
 | ---------- | --------------- | ------------------------------------------------------------------------- |
 | `--dir`    | `.10xagents`    | The new setup's folder                                                    |
-| `--from`   | `ultracode`     | The setup to extend: a folder, a bundled setup's name, or `github:…`      |
+| `--from`   | `starter`       | The setup to extend: a folder, a bundled setup's name, or `github:…`      |
 | `--target` | the folder name | The starter target's slug: the current folder's name as a slug, or `main` |
 
 It stops, and writes nothing, when the folder already has a config or a target with that slug.
@@ -75,7 +75,7 @@ A source written with a full commit SHA keeps that commit. For a private reposit
 
 ### validate
 
-`validate` checks every file of the setup against its schema, every reference (traits, params, vars, workflows, slots and templates), every override and every workflow's graph, and prints `Valid: 7 agents, 2 workflows, 2 targets.` when nothing's wrong.
+`validate` checks every file of the setup against its schema, every reference (traits, params, vars, workflows, slots and templates), every override and every workflow's graph, and prints `Valid: 3 agents, 1 workflows, 2 targets.` when nothing's wrong.
 
 | Flag       | Default      | What it does                         |
 | ---------- | ------------ | ------------------------------------ |
@@ -153,7 +153,7 @@ With `--cutover`, a request that started before the cutover and was done or stop
 
 With `--compare`, each run and request counts under the setup hash that was live for the target when it started, and the rest are left out. A unique prefix of a hash is enough.
 
-`--review-step` and `--plan-step` replace their default when you give them, so list every step you mean. Ultracode's `part` workflow adds its own review columns, which Multica keys from their names, so a setup that uses it passes both workflows' steps:
+`--review-step` and `--plan-step` replace their default when you give them, so list every step you mean. A setup whose second workflow has review columns of its own, like a `part` workflow, which Multica keys from their names, passes both workflows' steps:
 
 ```bash
 npx 10xagents bench --review-step quality_assurance --review-step part_quality_assurance --plan-step plan_review --plan-step part_plan_review

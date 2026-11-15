@@ -25,13 +25,13 @@ Point a target at the workspace, by its slug, name or id, and set `vars.owner` t
 id: my-team
 workspace: my-workspace
 connector: multica
-workflows: [request, part]
-agents: [dispatcher, planner, designer, builder, qa, writer, ops]
+workflows: [request]
+agents: [lead, builder, reviewer]
 vars:
   owner: Sam Lee
 squad:
-  name: Ultracode
-  leader: dispatcher
+  name: Starter
+  leader: lead
 ```
 
 Then compare and sync:
@@ -97,7 +97,7 @@ Multica makes a custom status's key from its first name and keeps it when you re
 
 `10xagents bench` reads the workspace's agents and issues, and each issue's runs, timeline and comments, and writes nothing. A request is an issue a person created with no parent, together with its sub-issues. The connector reports the Outcome, Review and Cost and time metrics of the catalogue, and the Claude Code collector in `10xagents` reports the Context ones.
 
-The review metrics need to know which statuses are review steps. The defaults are `quality_assurance` and `plan_review`, so a setup with Ultracode's `part` workflow passes its columns too:
+The review metrics need to know which statuses are review steps. The defaults are `quality_assurance` and `plan_review`, so a setup with a second workflow's review columns, like a `part` workflow's, passes them too:
 
 ```bash
 npx 10xagents bench --review-step quality_assurance --review-step part_quality_assurance --plan-step plan_review --plan-step part_plan_review

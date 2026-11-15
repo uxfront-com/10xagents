@@ -672,12 +672,12 @@ describe("init", () => {
     expect(output.out.at(-1)).toMatch(/^Built target my-project:/);
   });
 
-  it("extends ultracode by default", async () => {
-    const bundled = writeSetup(under("ultracode", baseFiles()));
+  it("extends starter by default", async () => {
+    const bundled = writeSetup(under("starter", baseFiles()));
     const cwd = tempDir();
     expect(await cli(cwd, ["init", "--target", "main"], sourceOptions(acme(), bundled))).toBe(0);
     expect(readFileSync(join(cwd, ".10xagents/10xagents.config.ts"), "utf8")).toContain(
-      'extends: ["ultracode"]',
+      'extends: ["starter"]',
     );
   });
 

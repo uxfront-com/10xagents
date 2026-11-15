@@ -344,7 +344,7 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       from: {
         type: "string",
         description: "The setup to extend: a folder, a bundled setup's name, or github:…",
-        default: "ultracode",
+        default: "starter",
       },
       target: {
         type: "string",
