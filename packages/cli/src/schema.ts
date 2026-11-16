@@ -91,6 +91,16 @@ export type Column = v.InferOutput<typeof ColumnSchema>;
 export const WorkflowSchema = v.strictObject({
   id: Id,
   entry: Id,
+  /**
+   * The text a connector that merges workflows puts before this workflow's column names, in
+   * place of its id. A connector that keeps workflows apart ignores it.
+   */
+  prefix: v.optional(
+    v.pipe(
+      Text,
+      v.check((text) => text.trim() === text, "must not start or end with a space"),
+    ),
+  ),
   columns: v.pipe(v.array(ColumnSchema), v.minLength(1, "must list at least one column")),
 });
 export type Workflow = v.InferOutput<typeof WorkflowSchema>;

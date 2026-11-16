@@ -81,9 +81,17 @@ Multica gives each workspace one Default workflow, so the connector merges a tar
 
 - **Built-in columns are shared.** Backlog, Todo, In Progress, In Review, Blocked, Done and Cancelled keep Multica's names, and every workflow that has one uses the same column. Two workflows have to agree on its handoff, step and moves.
 - **The first workflow keeps its column names.** A custom column takes its `name`, or its key in title case, so `plan_review` becomes Plan Review.
-- **Every later workflow's columns are prefixed** with its id in title case, so `part`'s `planning` becomes Part Planning.
+- **Every later workflow's columns are prefixed** with the workflow's `prefix`, or with its id in title case when it has none, so `part`'s `planning` becomes Part Planning, and with `prefix: In Parts /`, In Parts / Planning. The first workflow ignores its `prefix`, so the same workflow can come first in one target and later in another.
 
-Multica makes a custom status's key from its first name and keeps it when you rename the status, so Part Planning gets the key `part_planning`. `{{workflows.<id>.columns.<key>}}` renders these names, so the texts name the columns as the workspace shows them.
+Multica makes a custom status's key from its first name and keeps it when you rename the status, so with no `prefix`, Part Planning gets the key `part_planning`, and a workflow with a `prefix` gets keys made from its prefixed names. A workspace whose statuses were renamed keeps their old keys, and `multica issue-status list` shows each status's key. `{{workflows.<id>.columns.<key>}}` renders the names, so the texts name the columns as the workspace shows them.
+
+To rename a live workspace's columns, for example when you add a `prefix`, rename each status first, then run `sync`:
+
+```bash
+multica issue-status update part_planning --name "In Parts / Planning"
+```
+
+`sync` never renames a status. It matches the workspace's custom statuses to the columns by their place, but when it writes the workflow, it finds each custom column's status by its name. So without the rename, a sync where nothing else differs keeps the old names, and one that changes the workflow, like a step whose text names the column, creates a status with the new name and drops the old one from the workflow. Multica doesn't move issues, so those on the old status stay on it, under a hidden column.
 
 `build`, `plan` and `sync` stop on what Multica would refuse or put back another way:
 
