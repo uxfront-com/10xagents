@@ -1,6 +1,6 @@
 {
   "name": "10xagents",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A generic agent harness: validate a setup of templates, traits, agents and workflows, build the prompts, and sync them to a platform through a connector.",
   "keywords": [
     "agents",

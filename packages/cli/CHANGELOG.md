@@ -1,5 +1,16 @@
 # 10xagents
 
+## 0.3.0
+
+### Minor Changes
+
+- 53711e6: A workflow can set a `prefix`, the text a connector that merges workflows puts before a later workflow's column names in place of its id. With `prefix: In Parts /`, the Multica connector names a later workflow's `planning` column In Parts / Planning, where it would otherwise be Part Planning. A `prefix` can't be empty or start or end with a space. To rename a live workspace's columns, rename each status with `multica issue-status update` before you sync, so it keeps its key and its issues.
+
+### Patch Changes
+
+- e8e3e77: `10xagents init --dir my-setup` now writes the new setup into `my-setup/`, as `--help` says. Before, a plain name that wasn't an existing folder was read as a bundled setup's name, and `init` stopped with an error unless you wrote `--dir ./my-setup`. A `github:` source for `--dir` still stops with an error, now before anything is fetched.
+- e8e3e77: The CLI now asks its questions on standard error, so standard output carries only the command's output. Before, when several Multica profiles were logged in, `10xagents bench --format json > bench.json` wrote the profile question into the JSON file, and you never saw it. The numbered list of profiles is now part of the question, so it goes to standard error with it.
+
 ## 0.2.0
 
 ### Minor Changes
