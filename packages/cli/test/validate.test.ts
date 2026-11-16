@@ -30,6 +30,16 @@ const agent = (lines: string[]): string =>
     "",
   ].join("\n");
 
+/** The base setup, with `prefix` on its workflow. */
+const withPrefix = (prefix: string) => ({
+  ...baseSetup(),
+  "workflows/flow/workflow.yaml":
+    baseSetup()["workflows/flow/workflow.yaml"]?.replace(
+      "entry: todo",
+      `entry: todo\nprefix: "${prefix}"`,
+    ) ?? null,
+});
+
 const okSections = ["sections:", "  role: You're Alpha.", "  handback: The result."];
 
 /** The base setup, with Alpha's description set to `text`. */
@@ -157,6 +167,19 @@ describe("validate", () => {
   });
 
   describe("workflows", () => {
+    it("takes a workflow's prefix, and refuses an empty one or one with surrounding spaces", () => {
+      expect(run(writeSetup(withPrefix("In Parts /"))).errors).toEqual([]);
+      expect(errorsOf(withPrefix(""))).toEqual([
+        "workflows/flow/workflow.yaml: prefix: must not be empty",
+      ]);
+      expect(errorsOf(withPrefix(" In Parts"))).toEqual([
+        "workflows/flow/workflow.yaml: prefix: must not start or end with a space",
+      ]);
+      expect(errorsOf(withPrefix("In Parts "))).toEqual([
+        "workflows/flow/workflow.yaml: prefix: must not start or end with a space",
+      ]);
+    });
+
     it("reports an unknown workflow and an unknown column", () => {
       expect(
         errorsOf(

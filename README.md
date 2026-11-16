@@ -172,6 +172,8 @@ columns:
 
 Every column that hands off to an agent needs its `steps/<key>.md`, and a column with `handoff: none` takes no step.
 
+Beside `id`, `entry` and `columns`, a workflow can set a `prefix`. A connector that merges a target's workflows into one, like Multica's, puts it before a later workflow's column names in place of its id, so `prefix: In Parts /` turns `planning` into In Parts / Planning. A connector that keeps workflows apart ignores it.
+
 ### Targets
 
 A target is one place the setup syncs to, like a workspace:

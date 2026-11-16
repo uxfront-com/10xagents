@@ -2,7 +2,16 @@ import type { RenderedSetup } from "10xagents";
 import { describe, expect, it } from "vitest";
 
 import { columnNames } from "../src/index.ts";
-import { baseFiles, fake, issuesOf, planWith, render, syncWith, toApply } from "./helpers.ts";
+import {
+  baseFiles,
+  fake,
+  freshState,
+  issuesOf,
+  planWith,
+  render,
+  syncWith,
+  toApply,
+} from "./helpers.ts";
 import type { Files } from "./helpers.ts";
 
 /** The base setup plus a second workflow, `part`, on the same target. */
@@ -32,6 +41,15 @@ const twoWorkflows = (
     ) ?? null,
 });
 
+/** `files` with `prefix` on the `part` workflow, and its `planning` column's name set to `name`. */
+const withPrefix = (files: Files, prefix: string, name = "Planning"): Files => ({
+  ...files,
+  "workflows/part/workflow.yaml":
+    files["workflows/part/workflow.yaml"]
+      ?.replace("entry: planning", `entry: planning\nprefix: "${prefix}"`)
+      .replace("name: Planning", `name: ${name}`) ?? null,
+});
+
 describe("columnNames", () => {
   it("keeps the first workflow's names, prefixes later ones' custom columns and uses Multica's built-in names", () => {
     const names = columnNames([
@@ -56,6 +74,38 @@ describe("columnNames", () => {
     expect(names).toEqual({
       request: { todo: "Todo", plan_review: "Plan Review", planning: "Planning" },
       part: { planning: "Part Planning", in_progress: "In Progress" },
+    });
+  });
+
+  it("puts a later workflow's prefix before its custom columns, and ignores the first one's", () => {
+    const names = columnNames([
+      {
+        id: "request",
+        entry: "todo",
+        prefix: "Request /",
+        columns: [
+          { key: "todo", handoff: "none" },
+          { key: "planning", name: "Planning", handoff: "none" },
+        ],
+      },
+      {
+        id: "part",
+        entry: "planning",
+        prefix: "In Parts /",
+        columns: [
+          { key: "planning", name: "Planning", handoff: "none" },
+          { key: "quality_assurance", handoff: "none" },
+          { key: "in_progress", handoff: "none" },
+        ],
+      },
+    ]);
+    expect(names).toEqual({
+      request: { todo: "Todo", planning: "Planning" },
+      part: {
+        planning: "In Parts / Planning",
+        quality_assurance: "In Parts / Quality Assurance",
+        in_progress: "In Progress",
+      },
     });
   });
 });
@@ -89,6 +139,50 @@ describe("two workflows", () => {
       back_status_key: "blocked",
     });
     expect(toApply((await planWith(rendered, multica.env)).changes)).toEqual([]);
+  });
+
+  it("keep a renamed status's key when the workflow's prefix matches its new name", async () => {
+    const rendered = render(withPrefix(twoWorkflows(), "In Parts /"));
+    expect(issuesOf(rendered)).toEqual([]);
+    expect(rendered.workflows[1]?.columns[0]?.instructions).toBe(
+      "Plan the part, then send it on from In Parts / Planning.",
+    );
+    // A workspace whose part status was renamed to the prefixed name, keeping its key.
+    const statuses = [
+      { key: "planning", name: "Planning", category: "started" },
+      { key: "plan_approval", name: "Plan Approval", category: "started" },
+      { key: "part_planning", name: "In Parts / Planning", category: "started" },
+    ];
+    const multica = fake({ ...freshState(), statuses });
+    const { failed } = await syncWith(rendered, multica.env);
+    expect(failed).toEqual([]);
+    expect(multica.state().statuses).toEqual(statuses);
+    const steps = multica.state().workflows[0]?.steps ?? [];
+    expect(steps.map((step) => step.status_key)).toEqual([
+      "backlog",
+      "todo",
+      "planning",
+      "plan_approval",
+      "in_progress",
+      "part_planning",
+      "blocked",
+      "done",
+      "cancelled",
+    ]);
+    expect(steps[5]).toMatchObject({
+      handler: { type: "agent", id: "ag-beta" },
+      instructions: "Plan the part, then send it on from In Parts / Planning.",
+      next_status_key: "in_progress",
+      back_status_key: "blocked",
+    });
+    expect(toApply((await planWith(rendered, multica.env)).changes)).toEqual([]);
+  });
+
+  it("fail validate when a prefix gives a column another column's name", () => {
+    const issues = issuesOf(render(withPrefix(twoWorkflows(), "Plan", "Approval")));
+    expect(issues).toEqual([
+      "workflows.part.columns.planning.name: Plan Approval is also the name of workflow request's plan_approval: Multica names a status once",
+    ]);
   });
 
   it.each([
