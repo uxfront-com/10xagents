@@ -124,7 +124,10 @@ const hintFor = (
 /** Whether a refusal with `status` lets gh's token be tried. */
 const fallsBack = (cred: Credential, status: number | undefined): boolean => {
   if (cred.from === "option" || cred.token !== cred.set) return false;
-  if (cred.from === undefined) return status === undefined || refused(status);
+  // A 422 is a bad ref, which no token fixes.
+  if (cred.from === undefined) {
+    return status === undefined || status === 401 || status === 403 || status === 404;
+  }
   return status === 401;
 };
 

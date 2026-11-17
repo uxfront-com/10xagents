@@ -1077,11 +1077,15 @@ describe("githubFetcher", () => {
         downloadTemplate: gigetStub(undefined).download,
       });
       const failing = githubFetcher({ ghToken: gh.read, fetch: api(() => 500).fetch });
+      const badRef = githubFetcher({ ghToken: gh.read, fetch: api(() => 422).fetch });
       await withTokens({}, async () => {
         await fetcher.resolveRef(source);
         await fetcher.resolveRef(source);
         await fetcher.download(source, sha("f"), join(tempDir(), "x"));
         await expect(failing.resolveRef(source)).rejects.toThrow(/GitHub answered 500 \.$/);
+        await expect(badRef.resolveRef(source)).rejects.toThrow(
+          `no repository acme/agents with the ref feature/x.${NO_TOKEN}`,
+        );
       });
       expect(gh.calls).toBe(0);
     });
