@@ -15,7 +15,8 @@ import { describe, expect, it } from "vitest";
 import { configText, loadConfig, LOCK_FILE, readLock } from "../src/config.ts";
 import type { Lock } from "../src/config.ts";
 import { Diagnostics } from "../src/diagnostics.ts";
-import { fetchSource, githubFetcher, hashDir } from "../src/fetch.ts";
+import { fetchSource, ghAuthToken, githubFetcher, hashDir } from "../src/fetch.ts";
+import type { GhRunner } from "../src/fetch.ts";
 import {
   formatSource,
   parseDirSource,
@@ -81,6 +82,79 @@ const notFound = (token?: string) =>
 
 const urlOf = (url: string | URL | Request): string =>
   typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+
+const NO_TOKEN = " If the repository is private, set GITHUB_TOKEN or run gh auth login.";
+const GH_REFUSED =
+  " The gh CLI's account can't read it either. Run gh auth status, or set GITHUB_TOKEN.";
+
+const escape = (text: string): string => text.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const authOf = (init?: RequestInit): string | null =>
+  new Headers(init?.headers).get("authorization");
+
+type Tokens = { GITHUB_TOKEN?: string; GH_TOKEN?: string };
+
+const setEnv = (key: string, value: string | undefined) => {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+};
+
+/** Runs `run` with only `tokens` of GITHUB_TOKEN and GH_TOKEN set, then restores both. */
+const withTokens = async <T>(tokens: Tokens, run: () => Promise<T>): Promise<T> => {
+  const keys = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
+  const saved = keys.map((key) => process.env[key]);
+  try {
+    for (const key of keys) setEnv(key, tokens[key]);
+    return await run();
+  } finally {
+    keys.forEach((key, index) => setEnv(key, saved[index]));
+  }
+};
+
+/** A gh token reader that counts its calls. */
+const ghStub = (token: string | undefined) => {
+  const stub = {
+    calls: 0,
+    read: () => {
+      stub.calls += 1;
+      return Promise.resolve(token);
+    },
+  };
+  return stub;
+};
+
+/** GitHub's API, answering `statusFor(authorization)`, with a commit SHA for a 200. */
+const api = (statusFor: (auth: string | null) => number) => {
+  const auths: (string | null)[] = [];
+  const urls: string[] = [];
+  const fetch: typeof globalThis.fetch = (url, init) => {
+    urls.push(urlOf(url));
+    const auth = authOf(init);
+    auths.push(auth);
+    const status = statusFor(auth);
+    return Promise.resolve(status === 200 ? new Response(sha("f")) : new Response("", { status }));
+  };
+  return { fetch, auths, urls };
+};
+
+/**
+ * giget, which writes a file for the `good` auth, and otherwise writes part of one and throws,
+ * as a refused download does.
+ */
+const gigetStub = (good: string | undefined) => {
+  const calls: { auth: string | undefined; dirExisted: boolean }[] = [];
+  const download = (_input: string, options: { dir: string; auth?: string }) => {
+    calls.push({ auth: options.auth, dirExisted: existsSync(options.dir) });
+    mkdirSync(options.dir, { recursive: true });
+    if (options.auth !== good) {
+      writeFileSync(join(options.dir, "part.md"), "pa");
+      return Promise.reject(new Error("Failed to download for tests"));
+    }
+    writeFileSync(join(options.dir, "ok.md"), "ok");
+    return Promise.resolve();
+  };
+  return { calls, download };
+};
 
 describe("parseSource", () => {
   it("parses github:<owner>/<repo>/<subdir>#<ref>, and gh: the same", () => {
@@ -790,28 +864,26 @@ describe("githubFetcher", () => {
 
   it("reads GITHUB_TOKEN when it's used, and sends none without it", async () => {
     const seen: (string | null)[] = [];
+    const gh = ghStub("gho_x");
     const fetcher = githubFetcher({
+      ghToken: gh.read,
       fetch: (_url, init) => {
-        seen.push(new Headers(init?.headers).get("authorization"));
+        seen.push(authOf(init));
         return Promise.resolve(new Response(sha("f")));
       },
     });
-    const saved = process.env["GITHUB_TOKEN"];
-    try {
-      delete process.env["GITHUB_TOKEN"];
+    await withTokens({}, async () => {
       await fetcher.resolveRef(source);
       process.env["GITHUB_TOKEN"] = "later";
       await fetcher.resolveRef(source);
-    } finally {
-      if (saved === undefined) delete process.env["GITHUB_TOKEN"];
-      else process.env["GITHUB_TOKEN"] = saved;
-    }
+    });
     expect(seen).toEqual([null, "Bearer later"]);
+    expect(gh.calls).toBe(0);
   });
 
-  it("hints at GITHUB_TOKEN when the repository isn't found, and never prints the token", async () => {
+  it("hints at GITHUB_TOKEN and gh when the repository isn't found, and never prints the token", async () => {
     await expect(notFound().resolveRef(source)).rejects.toThrow(
-      "no repository acme/agents with the ref feature/x. If the repository is private, set GITHUB_TOKEN.",
+      `no repository acme/agents with the ref feature/x.${NO_TOKEN}`,
     );
     const error = await notFound("s3cret")
       .resolveRef(source)
@@ -822,6 +894,285 @@ describe("githubFetcher", () => {
       fetch: () => Promise.resolve(new Response("<html>")),
     });
     await expect(garbage.resolveRef(source)).rejects.toThrow("GitHub answered with no commit SHA");
+  });
+
+  describe("the gh CLI's token", () => {
+    it("is read after GitHub refuses a request with no token, and sent from then on", async () => {
+      const gh = ghStub("gho_x");
+      const github = api((auth) => (auth === "Bearer gho_x" ? 200 : 404));
+      const fetcher = githubFetcher({ ghToken: gh.read, fetch: github.fetch });
+      await withTokens({}, async () => {
+        expect(await fetcher.resolveRef(source)).toBe(sha("f"));
+        expect(github.auths).toEqual([null, "Bearer gho_x"]);
+        await Promise.all([fetcher.resolveRef(source), fetcher.resolveRef(source)]);
+        expect(github.auths).toEqual([null, "Bearer gho_x", "Bearer gho_x", "Bearer gho_x"]);
+        process.env["GITHUB_TOKEN"] = "new";
+        await fetcher.resolveRef(source).catch(() => undefined);
+      });
+      expect(github.auths.at(-1)).toBe("Bearer new");
+      expect(gh.calls).toBe(1);
+    });
+
+    it("is read once for requests that are refused in parallel", async () => {
+      const gh = ghStub("gho_x");
+      const github = api((auth) => (auth === "Bearer gho_x" ? 200 : 404));
+      const fetcher = githubFetcher({ ghToken: gh.read, fetch: github.fetch });
+      await withTokens({}, () =>
+        Promise.all([fetcher.resolveRef(source), fetcher.resolveRef(source)]),
+      );
+      expect(gh.calls).toBe(1);
+    });
+
+    it("downloads again with gh's token into a folder that doesn't exist yet", async () => {
+      const gh = ghStub("gho_x");
+      const giget = gigetStub("gho_x");
+      const dir = join(tempDir(), "entry");
+      const fetcher = githubFetcher({ ghToken: gh.read, downloadTemplate: giget.download });
+      await withTokens({}, () => fetcher.download(source, sha("f"), dir));
+      expect(giget.calls).toEqual([
+        { auth: undefined, dirExisted: false },
+        { auth: "gho_x", dirExisted: false },
+      ]);
+      expect(readFileSync(join(dir, "ok.md"), "utf8")).toBe("ok");
+      await withTokens({}, () => fetcher.download(source, sha("f"), join(tempDir(), "next")));
+      expect(giget.calls.at(-1)).toEqual({ auth: "gho_x", dirExisted: false });
+      expect(gh.calls).toBe(1);
+    });
+
+    it("replaces a GITHUB_TOKEN that GitHub rejects with a 401", async () => {
+      const gh = ghStub("gho_x");
+      const github = api((auth) => (auth === "Bearer gho_x" ? 200 : 401));
+      const fetcher = githubFetcher({ ghToken: gh.read, fetch: github.fetch });
+      await withTokens({ GITHUB_TOKEN: "bad" }, async () => {
+        expect(await fetcher.resolveRef(source)).toBe(sha("f"));
+        await fetcher.resolveRef(source);
+      });
+      expect(github.auths).toEqual(["Bearer bad", "Bearer gho_x", "Bearer gho_x"]);
+      expect(gh.calls).toBe(1);
+    });
+
+    it("replaces a rejected token in a download, after one API request confirms the 401", async () => {
+      const gh = ghStub("gho_x");
+      const giget = gigetStub("gho_x");
+      const github = api(() => 401);
+      const dir = join(tempDir(), "entry");
+      const fetcher = githubFetcher({
+        ghToken: gh.read,
+        fetch: github.fetch,
+        downloadTemplate: giget.download,
+      });
+      for (const vars of [{ GITHUB_TOKEN: "bad" }, { GH_TOKEN: "bad" }]) {
+        await withTokens(vars, () => fetcher.download(source, sha("f"), dir));
+        rmSync(dir, { recursive: true, force: true });
+      }
+      expect(github.urls).toEqual([`https://api.github.com/repos/acme/agents/commits/${sha("f")}`]);
+      expect(github.auths).toEqual(["Bearer bad"]);
+      expect(giget.calls).toEqual([
+        { auth: "bad", dirExisted: false },
+        { auth: "gho_x", dirExisted: false },
+        { auth: "gho_x", dirExisted: false },
+      ]);
+      expect(gh.calls).toBe(1);
+    });
+
+    it("isn't sent again when gh gives back the rejected token", async () => {
+      const gh = ghStub("bad");
+      const github = api(() => 401);
+      const giget = gigetStub("gho_x");
+      const fetcher = githubFetcher({
+        ghToken: gh.read,
+        fetch: github.fetch,
+        downloadTemplate: giget.download,
+      });
+      await withTokens({ GITHUB_TOKEN: "bad" }, async () => {
+        await expect(fetcher.resolveRef(source)).rejects.toThrow(
+          /GitHub answered 401 \. GITHUB_TOKEN is invalid or expired\. Set a new one, or unset it and run gh auth login\.$/,
+        );
+        await expect(fetcher.download(source, sha("f"), join(tempDir(), "x"))).rejects.toThrow(
+          / GITHUB_TOKEN is invalid or expired\. Set a new one, or unset it and run gh auth login\.$/,
+        );
+      });
+      expect(github.auths).toEqual(["Bearer bad", "Bearer bad"]);
+      expect(giget.calls.map((call) => call.auth)).toEqual(["bad"]);
+    });
+
+    it("names GH_TOKEN when that's the token GitHub rejects", async () => {
+      const fetcher = githubFetcher({
+        ghToken: () => Promise.resolve(undefined),
+        fetch: api(() => 401).fetch,
+      });
+      await withTokens({ GH_TOKEN: "bad" }, () =>
+        expect(fetcher.resolveRef(source)).rejects.toThrow(
+          / GH_TOKEN is invalid or expired\. Set a new one, or unset it and run gh auth login\.$/,
+        ),
+      );
+    });
+
+    it("never runs while a token from GITHUB_TOKEN or GH_TOKEN works, or gets a 403 or 404", async () => {
+      const gh = ghStub("gho_x");
+      const run = async (vars: Tokens, status: number) => {
+        const github = api(() => status);
+        const fetcher = githubFetcher({ ghToken: gh.read, fetch: github.fetch });
+        const error = await withTokens(vars, () =>
+          fetcher.resolveRef(source).then(
+            () => undefined,
+            (caught: unknown) => String(caught),
+          ),
+        );
+        return { auths: github.auths, error };
+      };
+      expect(await run({ GITHUB_TOKEN: "t" }, 200)).toEqual({
+        auths: ["Bearer t"],
+        error: undefined,
+      });
+      expect(await run({ GH_TOKEN: "g" }, 200)).toEqual({ auths: ["Bearer g"], error: undefined });
+      expect((await run({ GITHUB_TOKEN: "t", GH_TOKEN: "g" }, 200)).auths).toEqual(["Bearer t"]);
+      expect((await run({ GITHUB_TOKEN: "t" }, 404)).error).toMatch(
+        /no repository acme\/agents with the ref feature\/x\.$/,
+      );
+      expect((await run({ GITHUB_TOKEN: "t" }, 403)).error).toMatch(
+        /GitHub answered 403 \. Check GITHUB_TOKEN\.$/,
+      );
+      expect((await run({ GH_TOKEN: "g" }, 403)).error).toMatch(/ Check GH_TOKEN\.$/);
+      expect((await run({ GH_TOKEN: "g" }, 404)).error).toMatch(/feature\/x\.$/);
+      expect(gh.calls).toBe(0);
+    });
+
+    it("never runs for a download that fails with a token GitHub doesn't reject", async () => {
+      const gh = ghStub("gho_x");
+      for (const [status, end] of [
+        [404, "Failed to download for tests."],
+        [403, " Check GITHUB_TOKEN."],
+      ] as const) {
+        const fetcher = githubFetcher({
+          ghToken: gh.read,
+          fetch: api(() => status).fetch,
+          downloadTemplate: gigetStub("gho_x").download,
+        });
+        const error = await withTokens({ GITHUB_TOKEN: "t" }, () =>
+          fetcher.download(source, sha("f"), join(tempDir(), "x")).catch(String),
+        );
+        expect(error).toMatch(new RegExp(`${end.replaceAll(".", "\\.")}$`));
+      }
+      expect(gh.calls).toBe(0);
+    });
+
+    it("never runs for an explicit token option, even an undefined one", async () => {
+      const gh = ghStub("gho_x");
+      const refusing = (token: string | undefined, status: number) =>
+        githubFetcher({ token, ghToken: gh.read, fetch: api(() => status).fetch })
+          .resolveRef(source)
+          .catch(String);
+      expect(await refusing(undefined, 404)).toMatch(new RegExp(`${escape(NO_TOKEN)}$`));
+      expect(await refusing("t", 401)).toMatch(/ Check GITHUB_TOKEN\.$/);
+      expect(await refusing("t", 404)).toMatch(/feature\/x\.$/);
+      expect(gh.calls).toBe(0);
+    });
+
+    it("never runs while GitHub answers, or for an error that isn't a refusal", async () => {
+      const gh = ghStub("gho_x");
+      const fetcher = githubFetcher({
+        ghToken: gh.read,
+        fetch: api(() => 200).fetch,
+        downloadTemplate: gigetStub(undefined).download,
+      });
+      const failing = githubFetcher({ ghToken: gh.read, fetch: api(() => 500).fetch });
+      const badRef = githubFetcher({ ghToken: gh.read, fetch: api(() => 422).fetch });
+      await withTokens({}, async () => {
+        await fetcher.resolveRef(source);
+        await fetcher.resolveRef(source);
+        await fetcher.download(source, sha("f"), join(tempDir(), "x"));
+        await expect(failing.resolveRef(source)).rejects.toThrow(/GitHub answered 500 \.$/);
+        await expect(badRef.resolveRef(source)).rejects.toThrow(
+          `no repository acme/agents with the ref feature/x.${NO_TOKEN}`,
+        );
+      });
+      expect(gh.calls).toBe(0);
+    });
+
+    it("keeps today's error, with both fixes in the hint, when gh gives no token", async () => {
+      const github = api(() => 404);
+      const fetcher = githubFetcher({
+        ghToken: () => Promise.resolve(undefined),
+        fetch: github.fetch,
+        downloadTemplate: gigetStub("gho_x").download,
+      });
+      await withTokens({}, async () => {
+        await expect(fetcher.resolveRef(source)).rejects.toThrow(
+          `github:acme/agents/setups/base#feature/x: no repository acme/agents with the ref feature/x.${NO_TOKEN}`,
+        );
+        await expect(fetcher.download(source, sha("f"), join(tempDir(), "x"))).rejects.toThrow(
+          new RegExp(`Failed to download for tests\\.${escape(NO_TOKEN)}$`),
+        );
+      });
+      expect(github.auths).toEqual([null]);
+    });
+
+    it("says that gh's account can't read the repository either, and never prints a token", async () => {
+      const cases: [Tokens, number, string][] = [
+        [{}, 404, GH_REFUSED],
+        [
+          { GITHUB_TOKEN: "bad" },
+          401,
+          " GITHUB_TOKEN is invalid or expired, and the gh CLI's account can't read it either. Run gh auth status, or set a new GITHUB_TOKEN.",
+        ],
+      ];
+      for (const [vars, status, end] of cases) {
+        const fetcher = githubFetcher({
+          ghToken: () => Promise.resolve("gho_x"),
+          fetch: api((auth) => (auth === "Bearer gho_x" ? 404 : status)).fetch,
+          downloadTemplate: gigetStub("nobody").download,
+        });
+        const errors = await withTokens(vars, async () => [
+          await fetcher.resolveRef(source).catch(String),
+          await fetcher.download(source, sha("f"), join(tempDir(), "x")).catch(String),
+          // gh's token isn't kept after a refusal, so this tries it again.
+          await fetcher.resolveRef(source).catch(String),
+        ]);
+        for (const error of errors) {
+          expect(error).toMatch(new RegExp(`${escape(end)}$`));
+          expect(error).not.toContain("gho_x");
+          expect(error).not.toContain("bad ");
+        }
+      }
+    });
+  });
+
+  describe("ghAuthToken", () => {
+    it("runs gh auth token with no shell and without GITHUB_TOKEN or GH_TOKEN", async () => {
+      const calls: Parameters<GhRunner>[] = [];
+      const token = await withTokens({ GITHUB_TOKEN: "a", GH_TOKEN: "b" }, () =>
+        ghAuthToken((...args) => {
+          calls.push(args);
+          return Promise.resolve({ stdout: "gho_y\n" });
+        }),
+      );
+      expect(token).toBe("gho_y");
+      const [file, args, options] = calls[0] ?? [];
+      expect(file).toBe("gh");
+      expect(args).toEqual(["auth", "token", "--hostname", "github.com"]);
+      expect(options && "shell" in options).toBe(false);
+      expect(options && "GITHUB_TOKEN" in options.env).toBe(false);
+      expect(options && "GH_TOKEN" in options.env).toBe(false);
+      expect(options?.env["PATH"]).toBe(process.env["PATH"]);
+      expect(options?.timeout).toBe(10_000);
+      expect(process.env["GITHUB_TOKEN"]).not.toBe("a");
+    });
+
+    it("gives no token when gh is missing, fails, times out or prints nothing", async () => {
+      const failures = [
+        Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }),
+        Object.assign(new Error("Command failed: gh auth token"), { code: 1 }),
+        Object.assign(new Error("Command failed: gh auth token"), {
+          killed: true,
+          signal: "SIGTERM",
+        }),
+      ];
+      for (const failure of failures) {
+        expect(await ghAuthToken(() => Promise.reject(failure))).toBeUndefined();
+      }
+      expect(await ghAuthToken(() => Promise.resolve({ stdout: " \n" }))).toBeUndefined();
+    });
   });
 
   it("downloads with giget at the commit, with the token as auth", async () => {

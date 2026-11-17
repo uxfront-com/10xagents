@@ -71,7 +71,7 @@ It stops, and writes nothing, when the folder already has a config or a target w
 | `--dir`    | `.10xagents` | The setup's folder                            |
 | `--update` | off          | Moves every source to its ref's latest commit |
 
-A source written with a full commit SHA keeps that commit. For a private repository, set `GITHUB_TOKEN`.
+A source written with a full commit SHA keeps that commit. For a private repository, set `GITHUB_TOKEN` or `GH_TOKEN`, or sign in with `gh auth login`. The CLI reads the gh CLI's token only after GitHub refuses a request, with no token or with one it rejects as invalid or expired.
 
 ### validate
 
