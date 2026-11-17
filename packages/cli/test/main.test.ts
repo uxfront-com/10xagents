@@ -6,6 +6,8 @@ import { renderUsage, runCommand } from "citty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import pkg from "../package.json" with { type: "json" };
+import { readSyncLog } from "../src/bench/sync-log.ts";
+import { configText } from "../src/config.ts";
 import type { Change, Connector, PullOptions } from "../src/contract.ts";
 import { createMain, main, terminalAsk } from "../src/main.ts";
 import { ConnectorError } from "../src/registry.ts";
@@ -547,5 +549,237 @@ describe("sync", () => {
     ).toBe(1);
     expect(applied).toEqual([[agentChange]]);
     expect(out.join("")).toContain("Applied; 1 item needs setup first (see the ! lines above).");
+  });
+});
+
+/**
+ * A connector for two or more targets. They share one connector object, so its live state,
+ * pulls and applies are kept by target id.
+ */
+const targetsConnector = (
+  initial: Record<string, Change[]>,
+  options: { pullError?: Record<string, string> } = {},
+) => {
+  const pending = new Map(Object.entries(initial).map(([id, changes]) => [id, [...changes]]));
+  const pulls: { target: string; options: PullOptions }[] = [];
+  const applied: { target: string; changes: Change[] }[] = [];
+  // `apply` gets only the changes: they go to the target pulled last, as the CLI runs one at a time.
+  let current = "";
+  const connector = fakeConnector({
+    pull: (target, pullOptions = {}) => {
+      current = target.id;
+      pulls.push({ target: target.id, options: pullOptions });
+      const error = options.pullError?.[target.id];
+      if (error) return Promise.reject(new Error(error));
+      pullOptions.log?.(`Workspace: ${target.id}`);
+      return Promise.resolve({});
+    },
+    plan: (rendered) => Promise.resolve([...(pending.get(rendered.target.id) ?? [])]),
+    apply: (changes) => {
+      applied.push({ target: current, changes });
+      pending.set(
+        current,
+        (pending.get(current) ?? []).filter((change) => change.manual || change.note),
+      );
+      return Promise.resolve({ failed: [] });
+    },
+  });
+  return { connector, pulls, applied, pulled: () => pulls.map((pull) => pull.target) };
+};
+
+/** `baseSetup()` with a second target, `u`. */
+const twoTargets = (): Record<string, string | null> => ({
+  ...baseSetup(),
+  "targets/u/target.yaml": "id: u\nconnector: fake\nworkflows: [flow]\nagents: [alpha, beta]\n",
+});
+
+const uChange: Change = { kind: "agent", id: "alpha", summary: "~ Alpha in u" };
+const tChange: Change = { kind: "agent", id: "alpha", summary: "~ Alpha in t" };
+
+describe("several targets", () => {
+  it("syncs every target in slug order, past one that's up to date", async () => {
+    const { connector, applied } = targetsConnector({ t: [], u: [uChange] });
+    expect(
+      await cli(writeSetup(twoTargets()), ["sync", "--dir", ".", "--yes"], { fake: connector }),
+    ).toBe(0);
+    expect(applied).toEqual([{ target: "u", changes: [uChange] }]);
+    expect(out.join("")).toBe(
+      [
+        "Target t (1 of 2)",
+        "Workspace: t",
+        "Up to date.",
+        "",
+        "Target u (2 of 2)",
+        "Workspace: u",
+        "1 change:",
+        "  ~ Alpha in u",
+        "Workspace: u",
+        "Applied; u now matches the setup.",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("asks once per target, and goes on past one that's skipped", async () => {
+    const { connector, applied } = targetsConnector({ t: [tChange], u: [uChange] });
+    const questions: string[] = [];
+    const answers = ["n", "y"];
+    const ask = (question: string) => {
+      questions.push(question);
+      return Promise.resolve(answers.shift() ?? "");
+    };
+    expect(
+      await cli(writeSetup(twoTargets()), ["sync", "--dir", "."], { fake: connector }, ask),
+    ).toBe(0);
+    expect(questions).toEqual(["Apply 1 change to t? [y/N] ", "Apply 1 change to u? [y/N] "]);
+    expect(applied).toEqual([{ target: "u", changes: [uChange] }]);
+    expect(out.join("")).toContain("Skipped.");
+  });
+
+  it("goes on past a target whose platform can't be read, and exits 1", async () => {
+    const { connector, applied } = targetsConnector(
+      { t: [tChange], u: [uChange] },
+      { pullError: { t: "no workspace t for this profile" } },
+    );
+    expect(
+      await cli(writeSetup(twoTargets()), ["sync", "--dir", ".", "--yes"], { fake: connector }),
+    ).toBe(1);
+    expect(err).toEqual(["Stopped: no workspace t for this profile"]);
+    expect(applied).toEqual([{ target: "u", changes: [uChange] }]);
+  });
+
+  it("goes on past a target whose connector isn't installed, and exits 1", async () => {
+    const { connector, applied } = targetsConnector({ u: [uChange] });
+    const dir = writeSetup({
+      ...twoTargets(),
+      "targets/t/target.yaml": "id: t\nconnector: gone\nworkflows: [flow]\nagents: [alpha, beta]\n",
+    });
+    expect(await cli(dir, ["sync", "--dir", ".", "--yes"], { fake: connector })).toBe(1);
+    expect(err).toEqual(["no connector gone: install @10xagents/connector-gone"]);
+    expect(applied).toEqual([{ target: "u", changes: [uChange] }]);
+  });
+
+  it("syncs every target when the config names one", async () => {
+    const { connector, pulled } = targetsConnector({ t: [], u: [] });
+    const dir = writeSetup({
+      ...twoTargets(),
+      "10xagents.config.ts": configText({ extends: [], target: "t" }),
+    });
+    expect(await cli(dir, ["sync", "--dir", ".", "--yes"], { fake: connector })).toBe(0);
+    expect(pulled()).toEqual(["t", "u"]);
+  });
+
+  it("leaves out an extended setup's targets, unless --target names one", async () => {
+    const { connector, pulled } = targetsConnector({ t: [], u: [], x: [] });
+    const root = writeSetup({
+      ...Object.fromEntries(
+        Object.entries(twoTargets()).map(([path, text]) => [`.10xagents/${path}`, text]),
+      ),
+      ".10xagents/10xagents.config.ts": configText({ extends: ["../base"] }),
+      "base/targets/x/target.yaml":
+        "id: x\nconnector: fake\nworkflows: [flow]\nagents: [alpha, beta]\n",
+    });
+    expect(await cli(root, ["sync", "--yes"], { fake: connector })).toBe(0);
+    expect(pulled()).toEqual(["t", "u"]);
+    expect(await cli(root, ["sync", "--target", "x", "--yes"], { fake: connector })).toBe(0);
+    expect(pulled()).toEqual(["t", "u", "x"]);
+    expect(out.join("")).not.toContain("Target x");
+  });
+
+  it("syncs only the --target given, and passes the other flags to every target", async () => {
+    const dir = writeSetup(twoTargets());
+    const only = targetsConnector({ t: [tChange], u: [uChange] });
+    expect(
+      await cli(dir, ["sync", "--dir", ".", "--target", "u", "--yes"], { fake: only.connector }),
+    ).toBe(0);
+    expect(only.pulled()).toEqual(["u", "u"]);
+    expect(only.applied).toEqual([{ target: "u", changes: [uChange] }]);
+    expect(out.join("")).not.toContain("Target u");
+
+    const dry = targetsConnector({ t: [tChange], u: [uChange] });
+    expect(
+      await cli(dir, ["sync", "--dir", ".", "--dry-run", "--profile", "p"], {
+        fake: dry.connector,
+      }),
+    ).toBe(0);
+    expect(dry.applied).toEqual([]);
+    expect(dry.pulls.map(({ target, options }) => [target, options.profile])).toEqual([
+      ["t", "p"],
+      ["u", "p"],
+    ]);
+  });
+
+  it("refuses --workspace without --target, before reading any target", async () => {
+    const dir = writeSetup(twoTargets());
+    const { connector, pulls } = targetsConnector({ t: [], u: [] });
+    expect(await cli(dir, ["sync", "--dir", ".", "--workspace", "w"], { fake: connector })).toBe(1);
+    expect(err).toEqual(["--workspace works on one target: add --target."]);
+    expect(out).toEqual([]);
+    expect(pulls).toEqual([]);
+    expect(
+      await cli(dir, ["plan", "--dir", ".", "--workspace", "w", "--target", "u"], {
+        fake: connector,
+      }),
+    ).toBe(0);
+    expect(pulls.map(({ target, options }) => [target, options.workspace])).toEqual([["u", "w"]]);
+  });
+
+  it("stops before any target when the setup doesn't load", async () => {
+    const { connector, pulls } = targetsConnector({ t: [] });
+    const dir = writeSetup({
+      ...twoTargets(),
+      "targets/u/target.yaml": "id: x\nconnector: fake\nagents: [alpha]\n",
+    });
+    expect(await cli(dir, ["sync", "--dir", ".", "--yes"], { fake: connector })).toBe(1);
+    expect(err).toEqual(["targets/u/target.yaml: id: must match the folder name (u)", "1 error."]);
+    expect(out).toEqual([]);
+    expect(pulls).toEqual([]);
+  });
+
+  it("fails only the target whose own template is broken", async () => {
+    const { connector, applied } = targetsConnector({ t: [tChange], u: [uChange] });
+    const dir = writeSetup({
+      ...twoTargets(),
+      "targets/t/templates/broken.md": "---\nslots:\n  handback: {}\n---\nNo slot.\n",
+    });
+    expect(await cli(dir, ["sync", "--dir", ".", "--yes"], { fake: connector })).toBe(1);
+    expect(err).toEqual([
+      "targets/t/templates/broken.md: slots.handback: is never placed: the body has no {{slot:handback}}",
+      "1 error.",
+    ]);
+    expect(applied).toEqual([{ target: "u", changes: [uChange] }]);
+    expect(await cli(dir, ["validate", "--dir", ".", "--target", "u"])).toBe(0);
+  });
+
+  it("plans every target, and exits 1 on a ! line in any", async () => {
+    const dir = writeSetup(twoTargets());
+    const manual = targetsConnector({ t: [manualChange], u: [] });
+    expect(await cli(dir, ["plan", "--dir", "."], { fake: manual.connector })).toBe(1);
+    expect(out.join("")).toBe(
+      [
+        "Target t (1 of 2)",
+        "Workspace: t",
+        "  ! Beta: no agent with this name; create it first",
+        "1 item needs setup first (see the ! lines above).",
+        "",
+        "Target u (2 of 2)",
+        "Workspace: u",
+        "Up to date.",
+        "",
+      ].join("\n"),
+    );
+
+    out.length = 0;
+    const unread = targetsConnector({ t: [], u: [uChange] }, { pullError: { t: "offline" } });
+    expect(await cli(dir, ["plan", "--dir", "."], { fake: unread.connector })).toBe(1);
+    expect(err).toEqual(["Stopped: offline"]);
+    expect(out.join("")).toContain("Target u (2 of 2)\nWorkspace: u\n1 change:\n  ~ Alpha in u\n");
+  });
+
+  it("logs one line per target that changed", async () => {
+    const dir = writeSetup(twoTargets());
+    const { connector } = targetsConnector({ t: [tChange], u: [uChange] });
+    expect(await cli(dir, ["sync", "--dir", ".", "--yes"], { fake: connector })).toBe(0);
+    expect(readSyncLog(dir).map((entry) => entry.target)).toEqual(["t", "u"]);
   });
 });

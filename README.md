@@ -61,7 +61,7 @@ Let's start with what a setup is made of. Each piece is a file, and each has an 
 | Skill        | `skills/<name>/SKILL.md`           | A skill every target gets, with the rest of its folder                                            |
 | Squad        | `squad.md`                         | The squad's instructions                                                                          |
 | Target       | `targets/<slug>/target.yaml`       | One place to sync to: its connector, workflows, agents, vars, squad and overrides                 |
-| Config       | `10xagents.config.ts`              | The setups this one extends, and the target to use when `--target` is left out                    |
+| Config       | `10xagents.config.ts`              | The setups this one extends, and the target `build` uses when `--target` is left out              |
 
 A target folder can also hold `templates/`, `traits/`, `traits/global/`, `skills/` and a `squad.md` of its own, which only that target gets. A full setup looks like this:
 
