@@ -255,7 +255,7 @@ Layers merge by id:
 
 `10xagents install` pins every GitHub source to a commit in `10xagents.lock`, with a hash of its files, so the same setup renders the same prompts on every machine. `validate`, `build`, `plan` and `sync` on a local setup read GitHub sources only from the lock, and stop with "run 10xagents install" for one that isn't in it. `install --update` moves each source to its ref's latest commit, and a source written with a full commit SHA keeps it. A setup opened straight from GitHub or by a bundled name uses its own lock where it has one, and resolves the rest when it runs.
 
-Fetched sources are cached by commit in `$XDG_CACHE_HOME/10xagents`, or `~/.cache/10xagents`. For a private repository, set `GITHUB_TOKEN`. A relative `extends` inside a setup from GitHub stays in the same repository, at the same commit.
+Fetched sources are cached by commit in `$XDG_CACHE_HOME/10xagents`, or `~/.cache/10xagents`. For a private repository, set `GITHUB_TOKEN` or `GH_TOKEN`, or sign in with `gh auth login`. The CLI sends `GITHUB_TOKEN` first, then `GH_TOKEN`. When neither is set, or GitHub rejects the token as invalid or expired, it falls back to the gh CLI's token, which it reads only after GitHub refuses a request. A relative `extends` inside a setup from GitHub stays in the same repository, at the same commit.
 
 ## Template resolution
 
