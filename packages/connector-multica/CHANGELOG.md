@@ -1,5 +1,12 @@
 # @10xagents/connector-multica
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [797226e]
+  - 10xagents@0.4.0
+
 ## 0.2.0
 
 ### Minor Changes
