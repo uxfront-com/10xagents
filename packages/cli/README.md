@@ -31,7 +31,7 @@ npx 10xagents bench       # measures the last 30 days
 
 ## Commands
 
-Every command reads the setup in `.10xagents` unless you pass `--dir`, which takes a folder, a bundled setup's name like `starter`, or `github:<owner>/<repo>[/<subdir>][#<ref>]`. A command that works on one target takes `--target`, then the config's `target`, then the setup's only target, and otherwise stops and lists the targets to choose from.
+Every command reads the setup in `.10xagents` unless you pass `--dir`, which takes a folder, a bundled setup's name like `starter`, or `github:<owner>/<repo>[/<subdir>][#<ref>]`. A command that works on one target, like `build`, takes `--target`, then the config's `target`, then the setup's only target, and otherwise stops and lists the targets to choose from. `plan` and `sync` go through every target of the setup instead, as [plan](#plan) says.
 
 When something's wrong, a command prints one line per error, as `<file>: <field>: <message>`, then the count, and exits 1. A file fetched from GitHub shows as its source at its commit, rather than a path into the cache.
 
@@ -77,10 +77,10 @@ A source written with a full commit SHA keeps that commit. For a private reposit
 
 `validate` checks every file of the setup against its schema, every reference (traits, params, vars, workflows, slots and templates), every override and every workflow's graph, and prints `Valid: 3 agents, 1 workflows, 2 targets.` when nothing's wrong.
 
-| Flag       | Default      | What it does                         |
-| ---------- | ------------ | ------------------------------------ |
-| `--dir`    | `.10xagents` | The setup                            |
-| `--target` | every target | Checks only this target's references |
+| Flag       | Default      | What it does                                                  |
+| ---------- | ------------ | ------------------------------------------------------------- |
+| `--dir`    | `.10xagents` | The setup                                                     |
+| `--target` | every target | Checks only this target: its references and its own templates |
 
 ### build
 
@@ -105,13 +105,17 @@ The same setup always gives the same bytes. `build` loads the target's connector
 
 `plan` reads the target's live workspace through its connector, and prints each change that would bring it in line, or `Up to date.`. Changes only a person can make, like creating an agent the workspace doesn't have yet, print first, and `plan` exits 1 while there are any.
 
-| Flag          | Default                  | What it does                              |
-| ------------- | ------------------------ | ----------------------------------------- |
-| `--dir`       | `.10xagents`             | The setup                                 |
-| `--target`    | (see above)              | The target to compare                     |
-| `--profile`   | the connector's choice   | The platform profile or account to use    |
-| `--workspace` | the target's `workspace` | Another workspace to compare with         |
-| `--diff`      | off                      | Prints each text change as a unified diff |
+Without `--target`, `plan` goes through every target of the setup's own, the ones in its own `targets/` folder, in slug order. A target from a setup it extends, like the starter's `example`, is left out, and `--target example` still reaches it. The config's `target` doesn't narrow `plan`, and counts only for a setup with no targets of its own, which picks one target as `build` does.
+
+With two or more targets, each one starts with `Target web (1 of 2)`, after a blank line from the one before. An error in a target's own templates, its render, its connector or its workspace prints under that target, and the next target still runs. `plan` exits 1 when any target fails or needs a person to act. An error in a file of the setup, like a `target.yaml` that doesn't load, stops `plan` before the first target.
+
+| Flag          | Default                   | What it does                                                                     |
+| ------------- | ------------------------- | -------------------------------------------------------------------------------- |
+| `--dir`       | `.10xagents`              | The setup                                                                        |
+| `--target`    | every target of the setup | Compares only this target                                                        |
+| `--profile`   | the connector's choice    | The platform profile or account to use, for every target                         |
+| `--workspace` | the target's `workspace`  | Another workspace to compare with. With two or more targets, it needs `--target` |
+| `--diff`      | off                       | Prints each text change as a unified diff                                        |
 
 ### sync
 
@@ -122,9 +126,9 @@ The same setup always gives the same bytes. `build` loads the target's connector
 | `--dry-run` | off     | Shows what would change, and stops |
 | `--yes`     | off     | Applies without asking             |
 
-It also takes every flag of `plan`. Without a terminal to ask in, pass `--yes` to apply or `--dry-run` to only look.
+It also takes every flag of `plan`, and goes through the same targets, one after another, asking once for each. A target that's up to date, skipped or failed doesn't stop the ones after it. `sync` exits 1 when any target failed, still differs or needs a person to act. Without a terminal to ask in, pass `--yes` to apply or `--dry-run` to only look.
 
-Each sync that changes something appends a line to `sync-log.jsonl`: the target, the hash of everything it rendered, the setup's layers and the time. It goes in the setup's folder, or in `./.10xagents` for a setup from GitHub or a bundled name. Commit it, since `bench --compare` reads it to tell which setup was live when each run started. Local layers are written relative to the setup, so the log holds no paths of your machine.
+Each target that a sync changes appends a line to `sync-log.jsonl`: the target, the hash of everything it rendered, the setup's layers and the time. It goes in the setup's folder, or in `./.10xagents` for a setup from GitHub or a bundled name. Commit it, since `bench --compare` reads it to tell which setup was live when each run started. Local layers are written relative to the setup, so the log holds no paths of your machine.
 
 ### bench
 

@@ -122,6 +122,40 @@ const pickTarget = (
   return undefined;
 };
 
+/**
+ * The targets `plan` and `sync` go through: the `--target` given, else the setup's own targets
+ * (those in its own `targets/` folder, not an extended setup's), in slug order, else the config's
+ * `target` or the only target. `undefined` after an error.
+ */
+const liveTargets = (opened: Opened, given: string | undefined): string[] | undefined => {
+  if (given !== undefined) return [given];
+  const { setup } = opened;
+  const own = [...setup.targets]
+    .filter(([, target]) => target.root === setup.dir)
+    .map(([slug]) => slug)
+    .toSorted();
+  if (own.length > 0) return own;
+  const slug = pickTarget(setup, opened.config, given);
+  return slug === undefined ? undefined : [slug];
+};
+
+/**
+ * Runs `each` on every slug in turn. With two or more, each starts with a header, after a blank
+ * line. A target's errors set the exit code and leave the targets after it to run.
+ */
+const eachTarget = async (
+  slugs: readonly string[],
+  each: (slug: string) => Promise<void>,
+): Promise<void> => {
+  for (const [index, slug] of slugs.entries()) {
+    if (slugs.length > 1) {
+      if (index > 0) say("");
+      say(`Target ${slug} (${index + 1} of ${slugs.length})`);
+    }
+    await each(slug);
+  }
+};
+
 const yesNo = (value: boolean): string => (value ? "yes" : "no");
 
 const describeCapabilities = (capabilities: Capabilities): string =>
@@ -376,22 +410,53 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
     },
   });
 
-  /** Opens, validates and renders a target for its connector. `undefined` after an error. */
-  const prepare = async (
-    dir: string,
-    given: string | undefined,
-  ): Promise<{ connector: Connector; rendered: RenderedSetup; opened: Opened } | undefined> => {
+  /** An opened setup, with what prints its files in messages. */
+  interface Live {
+    opened: Opened;
+    cwd: string;
+    labels: Map<string, string>;
+  }
+
+  /**
+   * Opens the setup and picks its targets. `undefined` after an error: a setup that doesn't open or
+   * load stops before any target, since a target that didn't load isn't among its targets.
+   */
+  const openLive = async (args: {
+    dir: string;
+    target?: string | undefined;
+    workspace?: string | undefined;
+  }): Promise<{ live: Live; slugs: string[] } | undefined> => {
     const cwd = ctx.cwd();
     const diagnostics = new Diagnostics();
     const labels = new Map<string, string>();
-    const opened = await openSetup(dir, cwd, sourceOptions(labels), diagnostics);
+    const opened = await openSetup(args.dir, cwd, sourceOptions(labels), diagnostics);
     if (!opened) {
       printDiagnostics(diagnostics, cwd, labels);
       return undefined;
     }
+    const slugs = liveTargets(opened, args.target);
+    if (slugs === undefined) return undefined;
+    if (args.workspace !== undefined && slugs.length > 1) {
+      fail(["--workspace works on one target: add --target."]);
+      return undefined;
+    }
+    if (diagnostics.size > 0) {
+      // One target reports its own errors beside the setup's, as it always has.
+      const only = slugs.length === 1 ? slugs[0] : undefined;
+      if (only !== undefined) validateSetup(opened.setup, diagnostics, { target: only });
+      printDiagnostics(diagnostics, cwd, labels);
+      return undefined;
+    }
+    return { live: { opened, cwd, labels }, slugs };
+  };
+
+  /** Validates and renders one target for its connector. `undefined` after an error. */
+  const prepare = async (
+    { opened, cwd, labels }: Live,
+    slug: string,
+  ): Promise<{ connector: Connector; rendered: RenderedSetup } | undefined> => {
     const { setup } = opened;
-    const slug = pickTarget(setup, opened.config, given);
-    if (slug === undefined) return undefined;
+    const diagnostics = new Diagnostics();
     validateSetup(setup, diagnostics, { target: slug });
     const target = diagnostics.size > 0 ? undefined : setup.targets.get(slug);
     if (!target) {
@@ -414,12 +479,15 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       printDiagnostics(diagnostics, cwd, labels);
       return undefined;
     }
-    return { connector, rendered, opened };
+    return { connector, rendered };
   };
 
   const liveArgs = {
     dir: dirArg,
-    target: targetArg,
+    target: {
+      ...targetArg,
+      description: "Only this target. The default is every target of the setup's own",
+    },
     profile: { type: "string", description: "The platform profile to use" },
     workspace: { type: "string", description: "The workspace to use instead of the target's" },
     diff: { type: "boolean", description: "Print each text diff", default: false },
@@ -468,11 +536,15 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
     },
     args: liveArgs,
     run: async ({ args }) => {
-      const prepared = await prepare(args.dir, args.target);
-      if (!prepared) return;
-      const planned = await planLive(prepared.connector, prepared.rendered, pullOptions(args));
-      if (!planned) return;
-      if (printPlan(planned.changes, args.diff).manual) process.exitCode = 1;
+      const opened = await openLive(args);
+      if (!opened) return;
+      await eachTarget(opened.slugs, async (slug) => {
+        const prepared = await prepare(opened.live, slug);
+        if (!prepared) return;
+        const planned = await planLive(prepared.connector, prepared.rendered, pullOptions(args));
+        if (!planned) return;
+        if (printPlan(planned.changes, args.diff).manual) process.exitCode = 1;
+      });
     },
   });
 
@@ -491,55 +563,60 @@ export const createMain = (context: Partial<CliContext> = {}): CommandDef => {
       yes: { type: "boolean", description: "Apply without asking", default: false },
     },
     run: async ({ args }) => {
-      const prepared = await prepare(args.dir, args.target);
-      if (!prepared) return;
-      const { connector, rendered } = prepared;
-      const planned = await planLive(connector, rendered, pullOptions(args));
-      if (!planned) return;
-      const { toApply, manual } = printPlan(planned.changes, args.diff);
-      if (manual) process.exitCode = 1;
-      if (toApply.length === 0 || args["dry-run"]) return;
-      if (!args.yes) {
-        if (!ctx.ask) {
-          return fail(["No terminal to ask in: pass --yes to apply, or --dry-run to only look."]);
+      const opened = await openLive(args);
+      if (!opened) return;
+      const { live } = opened;
+      await eachTarget(opened.slugs, async (slug) => {
+        const prepared = await prepare(live, slug);
+        if (!prepared) return;
+        const { connector, rendered } = prepared;
+        const planned = await planLive(connector, rendered, pullOptions(args));
+        if (!planned) return;
+        const { toApply, manual } = printPlan(planned.changes, args.diff);
+        if (manual) process.exitCode = 1;
+        if (toApply.length === 0 || args["dry-run"]) return;
+        if (!args.yes) {
+          if (!ctx.ask) {
+            return fail(["No terminal to ask in: pass --yes to apply, or --dry-run to only look."]);
+          }
+          const answer = await ctx.ask(
+            `Apply ${plural(toApply.length, "change", "changes")} to ${planned.name}? [y/N] `,
+          );
+          if (!/^y(es)?$/i.test(answer.trim())) {
+            say("Skipped.");
+            return;
+          }
         }
-        const answer = await ctx.ask(
-          `Apply ${plural(toApply.length, "change", "changes")} to ${planned.name}? [y/N] `,
-        );
-        if (!/^y(es)?$/i.test(answer.trim())) {
-          say("Skipped.");
-          return;
+        const started = new Date(ctx.now()).toISOString();
+        let result;
+        try {
+          result = await connector.apply(toApply);
+        } catch (error) {
+          return fail([`Stopped: ${error instanceof Error ? error.message : String(error)}`]);
         }
-      }
-      const started = new Date(ctx.now()).toISOString();
-      let result;
-      try {
-        result = await connector.apply(toApply);
-      } catch (error) {
-        return fail([`Stopped: ${error instanceof Error ? error.message : String(error)}`]);
-      }
-      const failed = result?.failed ?? [];
-      // Something changed, so the setup that's live from now on goes in the log.
-      if (failed.length < toApply.length) logSync(prepared.opened, rendered, started);
-      if (failed.length > 0) {
-        fail(failed.map(({ change, message }) => `Failed: ${change.summary}: ${message}`));
-      }
-      // A re-check of the same place, through the same account, with nothing to ask.
-      const left = await planLive(connector, rendered, planned.again);
-      if (!left) return;
-      const leftToApply = left.changes.filter((change) => !change.manual && !change.note);
-      const leftManual = left.changes.filter((change) => change.manual);
-      if (leftToApply.length > 0) {
-        fail([
-          `${plural(leftToApply.length, "change still differs", "changes still differ")}:`,
-          ...leftToApply.map((change) => `  ${change.summary}`),
-        ]);
-      } else if (leftManual.length > 0) {
-        say(
-          `Applied; ${plural(leftManual.length, "item needs", "items need")} setup first (see the ! lines above).`,
-        );
-        process.exitCode = 1;
-      } else if (failed.length === 0) say(`Applied; ${planned.name} now matches the setup.`);
+        const failed = result?.failed ?? [];
+        // Something changed, so the setup that's live from now on goes in the log.
+        if (failed.length < toApply.length) logSync(live.opened, rendered, started);
+        if (failed.length > 0) {
+          fail(failed.map(({ change, message }) => `Failed: ${change.summary}: ${message}`));
+        }
+        // A re-check of the same place, through the same account, with nothing to ask.
+        const left = await planLive(connector, rendered, planned.again);
+        if (!left) return;
+        const leftToApply = left.changes.filter((change) => !change.manual && !change.note);
+        const leftManual = left.changes.filter((change) => change.manual);
+        if (leftToApply.length > 0) {
+          fail([
+            `${plural(leftToApply.length, "change still differs", "changes still differ")}:`,
+            ...leftToApply.map((change) => `  ${change.summary}`),
+          ]);
+        } else if (leftManual.length > 0) {
+          say(
+            `Applied; ${plural(leftManual.length, "item needs", "items need")} setup first (see the ! lines above).`,
+          );
+          process.exitCode = 1;
+        } else if (failed.length === 0) say(`Applied; ${planned.name} now matches the setup.`);
+      });
     },
   });
 

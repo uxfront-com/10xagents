@@ -7,7 +7,10 @@ import type { LoadedWorkflow, Setup } from "./loader.ts";
 import { checkTemplate, renderTarget } from "./render.ts";
 
 export interface ValidateOptions {
-  /** Check only this target's references. The default checks every target. */
+  /**
+   * Check only this target: its references, and its own templates beside the setup's. The default
+   * checks every target.
+   */
   target?: string;
 }
 
@@ -18,11 +21,13 @@ export const validateSetup = (
   options: ValidateOptions = {},
 ): void => {
   for (const template of setup.templates.values()) checkTemplate(template, diagnostics);
-  for (const target of setup.targets.values()) {
-    for (const template of target.templates.values()) checkTemplate(template, diagnostics);
+  const slugs = options.target === undefined ? [...setup.targets.keys()] : [options.target];
+  for (const slug of slugs) {
+    for (const template of setup.targets.get(slug)?.templates.values() ?? []) {
+      checkTemplate(template, diagnostics);
+    }
   }
   for (const workflow of setup.workflows.values()) checkWorkflow(workflow, setup, diagnostics);
-  const slugs = options.target === undefined ? [...setup.targets.keys()] : [options.target];
   for (const slug of slugs) renderTarget(setup, slug, diagnostics);
 };
 

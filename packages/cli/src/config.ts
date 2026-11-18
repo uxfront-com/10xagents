@@ -28,7 +28,7 @@ export const ConfigSchema = v.strictObject({
     ]),
     [],
   ),
-  /** The target `--target` picks when it's left out. */
+  /** The target `build` uses when `--target` is left out. */
   target: v.optional(Id),
   /** Options for each connector, by connector id. The connector reads its own. */
   connectors: v.optional(v.record(Id, v.unknown()), {}),
@@ -97,7 +97,7 @@ export const configText = (config: { extends: readonly string[]; target?: string
     ...(config.target === undefined
       ? []
       : [
-          `  // The target \`--target\` picks when it's left out.`,
+          `  // The target \`build\` uses when \`--target\` is left out.`,
           `  target: ${JSON.stringify(config.target)},`,
         ]),
     "};",
