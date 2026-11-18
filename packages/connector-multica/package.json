@@ -1,6 +1,6 @@
 {
   "name": "@10xagents/connector-multica",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "The Multica connector for 10xagents: sync a setup's agents, squad and workflow to a Multica workspace, and benchmark it.",
   "keywords": [
     "10xagents",
